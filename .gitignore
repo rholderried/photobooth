@@ -51,3 +51,6 @@ tools/*/vendor
 **/.DS_Store
 
 /vendor/
+
+#ignore CLAUDE files
+CLAUDE.md
