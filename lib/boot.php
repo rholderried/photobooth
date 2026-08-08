@@ -79,8 +79,10 @@ $GLOBALS[ProcessService::class] = new ProcessService();
 
 $config = ConfigurationService::getInstance()->getConfiguration();
 if ($config['dev']['loglevel'] > 0) {
-    ini_set('display_errors', 1);
-    ini_set('display_startup_errors', 1);
+    // Never display errors inline: every request here is either a JSON API
+    // response or a page the kiosk renders, and inline HTML error output
+    // silently corrupts both. log_errors (on by default) still captures
+    // everything at full verbosity in Apache's error log.
     error_reporting(E_ALL);
 }
 
