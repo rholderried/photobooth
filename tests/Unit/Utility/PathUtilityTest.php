@@ -10,7 +10,7 @@ final class PathUtilityTest extends TestCase
 {
     public function testGetRootPath(): void
     {
-        $expected = realpath(__DIR__ . '/../../../');
+        $expected = realpath(__DIR__ . '/../../../') . DIRECTORY_SEPARATOR;
         $this->assertSame($expected, PathUtility::getRootPath());
     }
 
@@ -28,7 +28,7 @@ final class PathUtilityTest extends TestCase
             ['data', $rootPath . DIRECTORY_SEPARATOR . 'data'],
             ['template/classic.template.php', $rootPath . DIRECTORY_SEPARATOR . 'template' . DIRECTORY_SEPARATOR . 'classic.template.php'],
             ['/images', $rootPath . DIRECTORY_SEPARATOR . 'images'],
-            ['/invalid-path', $rootPath . DIRECTORY_SEPARATOR . 'invalid-path']
+            ['/invalid-path', $rootPath . DIRECTORY_SEPARATOR . 'invalid-path'],
         ];
     }
 
@@ -72,7 +72,7 @@ final class PathUtilityTest extends TestCase
     public function testGetPublicPathAbsolute(string $path, string $expected): void
     {
         $_SERVER['HTTPS'] = 'on';
-        $_SERVER['SERVER_NAME'] = 'photoboothproject.github.io';
+        $_SERVER['HTTP_HOST'] = 'photoboothproject.github.io';
         $this->assertSame($expected, PathUtility::getPublicPath($path, true));
     }
 

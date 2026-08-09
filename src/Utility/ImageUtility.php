@@ -2,6 +2,7 @@
 
 namespace Photobooth\Utility;
 
+use Exception;
 use GdImage;
 use Photobooth\Enum\ImageFilterEnum;
 
@@ -37,27 +38,18 @@ class ImageUtility
     public const resourcePaths = [
         'resources/img/background',
         'resources/img/frames',
-        'resources/img/demo'
+        'resources/img/demo',
+        'data/images',
     ];
 
+    /**
+     * @throws Exception
+     */
     public static function getImagesFromPath(string $path, bool $processing = true): array
     {
-        if (!PathUtility::isAbsolutePath($path)) {
-            $path = PathUtility::getAbsolutePath($path);
-        }
-        if (!PathUtility::isAbsolutePath($path)) {
-            throw new \Exception('Path ' . $path . ' does not exist.');
-        }
+        $allowedExtensions = $processing ? self::supportedFileExtensionsProcessing : self::supportedFileExtensionsSelect;
 
-        $files = [];
-        foreach (new \DirectoryIterator($path) as $file) {
-            if (!$file->isFile() || !in_array(strtolower($file->getExtension()), $processing ? self::supportedFileExtensionsProcessing : self::supportedFileExtensionsSelect)) {
-                continue;
-            }
-            $files[] = $path . '/' . $file->getFilename();
-        }
-
-        return $files;
+        return FileUtility::getFilesFromPath($path, $allowedExtensions);
     }
 
     public static function getRandomImageFromPath(string $path): string
@@ -72,7 +64,7 @@ class ImageUtility
 
         $files = self::getImagesFromPath($path);
         if (count($files) === 0) {
-            throw new \Exception('Path ' . $path . ' does not contain images.');
+            throw new Exception('Path ' . $path . ' does not contain images.');
         }
 
         return $files[array_rand($files)];
@@ -80,23 +72,27 @@ class ImageUtility
 
     public static function getDemoImages(int $filecount = 0): array
     {
-        $primaryFolder = 'private/images/demo';
-        $secondaryFolder = 'data/tmp';
-        $tertiaryFolder = 'resources/img/demo';
+        $folders = [
+            'private/images/demo',
+            'data/tmp',
+            'resources/img/demo',
+        ];
         $demoImages = [];
 
-        $demoImages = self::getImagesFromPath($primaryFolder);
+        foreach ($folders as $folder) {
+            try {
+                $demoImages = self::getImagesFromPath($folder);
+            } catch (Exception) {
+                $demoImages = [];
+            }
 
-        if (empty($demoImages)) {
-            $demoImages = self::getImagesFromPath($secondaryFolder);
+            if (!empty($demoImages)) {
+                break;
+            }
         }
 
         if (empty($demoImages)) {
-            $demoImages = self::getImagesFromPath($tertiaryFolder);
-        }
-
-        if (empty($demoImages)) {
-            throw new \Exception('No images found in any of the demo folders.');
+            throw new Exception('No images found in any of the demo folders.');
         }
 
         if ($filecount > 0) {

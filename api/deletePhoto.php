@@ -6,18 +6,25 @@ require_once '../lib/boot.php';
 
 use Photobooth\Enum\FolderEnum;
 use Photobooth\FileDelete;
-use Photobooth\Helper;
 use Photobooth\Service\DatabaseManagerService;
+use Photobooth\Service\ImageMetadataCacheService;
 use Photobooth\Service\LoggerService;
+use Photobooth\Service\RemoteStorageService;
 
 header('Content-Type: application/json');
 
 $logger = LoggerService::getInstance()->getLogger('main');
 $logger->debug(basename($_SERVER['PHP_SELF']));
 
+$remoteStorage = RemoteStorageService::getInstance();
+
 try {
     if (empty($_POST['file'])) {
         throw new \Exception('No file provided');
+    }
+    $file = basename((string)$_POST['file']);
+    if ($file === '' || !preg_match('/^[A-Za-z0-9._-]+$/', $file)) {
+        throw new \Exception('Invalid file name provided');
     }
 } catch (\Exception $e) {
     // Handle the exception
@@ -26,77 +33,57 @@ try {
     die();
 }
 
-$file = $_POST['file'];
+$fileBaseName = pathinfo($file, PATHINFO_FILENAME);
+$filesToDelete = [$file];
 $paths = [
     FolderEnum::IMAGES->absolute(),
     FolderEnum::THUMBS->absolute(),
     FolderEnum::KEYING->absolute(),
 ];
 
-if (!$config['picture']['keep_original']) {
-    $paths[] = FolderEnum::TEMP->absolute();
-}
+$paths[] = FolderEnum::TEMP->absolute();
 
-$delete = new FileDelete($file, $paths);
-$delete->deleteFiles();
-$logData = $delete->getLogData();
-
-if ($config['database']['enabled']) {
-    $database = DatabaseManagerService::getInstance();
-    $database->deleteContentFromDB($file);
-}
-
-if ($config['ftp']['enabled'] && $config['ftp']['delete']) {
-    $ftp = ftp_ssl_connect($config['ftp']['baseURL'], $config['ftp']['port']);
-
-    if ($ftp === false) {
-        $message = 'Failed to connect to FTP Server!';
-        $logger->error($message, $config['ftp']);
-        echo json_encode(['error' => $message]);
-        die();
-    }
-
-    // login to ftp server
-    $login_result = ftp_login($ftp, $config['ftp']['username'], $config['ftp']['password']);
-
-    if (!$login_result) {
-        $message = 'Can\'t connect to FTP Server!';
-        $logger->error($message, $config['ftp']);
-        echo json_encode(['error' => $message]);
-        die();
-    }
-
-    $remote_dest = empty($config['ftp']['baseFolder']) ? '' : DIRECTORY_SEPARATOR . $config['ftp']['baseFolder'] . DIRECTORY_SEPARATOR;
-
-    $remote_dest .= $config['ftp']['folder'] . DIRECTORY_SEPARATOR . Helper::slugify($config['ftp']['title']);
-    if ($config['ftp']['appendDate']) {
-        $remote_dest .= DIRECTORY_SEPARATOR . date('Y/m/d');
-    }
-
-    @Helper::cdFTPTree($ftp, $remote_dest);
-
-    $delete_result = ftp_delete($ftp, $file);
-
-    if (!$delete_result) {
-        $message = 'Unable to delete file on ftp server ' . $file;
-        $logger->error($message, $config['ftp']);
-        echo json_encode(['error' => $message]);
-        die();
-    }
-
-    if ($config['ftp']['upload_thumb']) {
-        $delete_result = ftp_delete($ftp, 'tmb_' . $file);
-
-        if (!$delete_result) {
-            $message = 'Unable to delete thumb on ftp server ' . $file;
-            $logger->error($message, $config['ftp']);
-            echo json_encode(['error' => $message]);
-            die();
+// Collect possible single images belonging to the collage
+// Catch any single images that match the base pattern, even if keep_single_images is off or limit changed
+foreach ($paths as $path) {
+    $matches = glob($path . DIRECTORY_SEPARATOR . $fileBaseName . '-*.jpg');
+    if ($matches !== false) {
+        foreach ($matches as $matchedFile) {
+            $filesToDelete[] = basename($matchedFile);
         }
     }
+}
 
-    // close the connection
-    @ftp_close($ftp);
+$filesToDelete = array_values(array_unique($filesToDelete));
+
+$logData = [
+    'success' => true,
+    'file' => $file,
+    'files' => [],
+];
+
+// Remove cached metadata for this file and its thumb, if present
+ImageMetadataCacheService::getInstance()->remove(FolderEnum::IMAGES->absolute() . DIRECTORY_SEPARATOR . $file);
+ImageMetadataCacheService::getInstance()->remove(FolderEnum::THUMBS->absolute() . DIRECTORY_SEPARATOR . $file);
+
+foreach ($filesToDelete as $fileName) {
+    $delete = new FileDelete($fileName, $paths, (bool) $config['picture']['keep_original']);
+    $delete->deleteFiles();
+    $singleLogData = $delete->getLogData();
+    $logData['files'][$fileName] = $singleLogData;
+    if (!$singleLogData['success']) {
+        $logData['success'] = false;
+    }
+
+    if ($config['database']['enabled']) {
+        $database = DatabaseManagerService::getInstance();
+        $database->deleteContentFromDB($fileName);
+    }
+
+    if ($config['ftp']['enabled'] && $config['ftp']['delete']) {
+        $remoteStorage->delete($remoteStorage->getStorageFolder() . '/images/' . $fileName);
+        $remoteStorage->delete($remoteStorage->getStorageFolder() . '/thumbs/' . $fileName);
+    }
 }
 
 if (!$logData['success'] || $config['dev']['loglevel'] > 1) {

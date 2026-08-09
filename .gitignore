@@ -43,7 +43,6 @@ tools/*/vendor
 .phpunit.result.cache
 
 # ignore some IDE and OS files
-.ddev/
 *.iml
 *.ipr
 *.iws
@@ -54,3 +53,11 @@ tools/*/vendor
 
 #ignore CLAUDE files
 CLAUDE.md
+
+/.ddev/.built
+
+# rembg virtual environment
+scripts/rembg_venv/
+/.venv
+/site
+/.envrc

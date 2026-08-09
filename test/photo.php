@@ -36,17 +36,17 @@ try {
     $imageHandler->debugLevel = $config['dev']['loglevel'];
     $imageHandler->imageModified = false;
 
-    $imageResource = $imageHandler->createFromImage(ImageUtility::getRandomImageFromPath('resources/img/demo'));
+    $imageResource = $imageHandler->createFromImage(ImageUtility::getDemoImages(1)[0]);
     if (!$imageResource) {
         throw new \Exception('Error creating image resource.');
     }
     if (class_exists('Photobooth\Processor\ImageProcessor')) {
         $processor = new ImageProcessor($imageHandler, $logger, $database, $vars, $config);
+        if (method_exists($processor, 'preImageProcessing')) {
+            [$imageHandler, $vars, $config, $imageResource] = $processor->preImageProcessing($imageHandler, $vars, $config, $imageResource);
+        }
     }
-    if ($processor !== null && $processor instanceof ImageProcessor && method_exists($processor, 'preImageProcessing')) {
-        list($imageHandler, $vars, $config, $imageResource) = $processor->preImageProcessing($imageHandler, $vars, $config, $imageResource);
-    }
-    $imageHandler->framePath = $config['picture']['frame'];
+    $imageHandler->framePath = PathUtility::getPublicPath($config['picture']['frame']);
 
     // apply filter
     if ($vars['imageFilter'] !== ImageFilterEnum::PLAIN) {
@@ -73,10 +73,10 @@ try {
         }
     }
 
-    if ($config['picture']['rotation'] !== '0') {
+    if ((int)$config['picture']['rotation'] !== 0) {
         $imageResource = $imageHandler->rotateResizeImage(
             image: $imageResource,
-            degrees: $config['picture']['rotation']
+            degrees: (int)$config['picture']['rotation'],
         );
         if (!$imageResource) {
             throw new \Exception('Error resizing resource.');
@@ -106,7 +106,7 @@ try {
     }
 
     if ($processor !== null && $processor instanceof ImageProcessor && method_exists($processor, 'postImageProcessing')) {
-        list($imageHandler, $vars, $config, $imageResource) = $processor->postImageProcessing($imageHandler, $vars, $config, $imageResource);
+        [$imageHandler, $vars, $config, $imageResource] = $processor->postImageProcessing($imageHandler, $vars, $config, $imageResource);
     }
 
     if ($config['textonpicture']['enabled']) {
@@ -149,8 +149,19 @@ include PathUtility::getAbsolutePath('admin/helper/index.php');
             </div>
             <?php
                     if (empty($errorMessage)) {
-                        echo '<div class="border border-solid border-black">';
-                        echo '<img src="' . PathUtility::getPublicPath($vars['tmpFile']) . '" alt="Test Image">';
+                        echo '<div class="relative inline-block border border-solid border-black">';
+                        echo '<img src="' . PathUtility::getPublicPath($vars['tmpFile']) . '" alt="Test Image" style="display:block;">';
+                        echo '<div style="position:absolute;left:0;top:50%;width:100%;height:2px;background:#ff1744;transform:translateY(-50%);pointer-events:none;z-index:10;"></div>';
+                        echo '<div style="position:absolute;left:0;top:33.333%;width:100%;height:2px;background:#ff1744;transform:translateY(-50%);pointer-events:none;z-index:10;"></div>';
+                        echo '<div style="position:absolute;left:0;top:66.666%;width:100%;height:2px;background:#ff1744;transform:translateY(-50%);pointer-events:none;z-index:10;"></div>';
+                        echo '<div style="position:absolute;left:0;bottom:0;width:100%;height:10px;background:#ff1744;pointer-events:none;z-index:10;"></div>';
+                        echo '<div style="position:absolute;left:0;top:16.666%;width:100%;height:2px;background:#ff1744;transform:translateY(-50%);pointer-events:none;z-index:10;"></div>';
+                        echo '<div style="position:absolute;left:0;bottom:16.666%;width:100%;height:2px;background:#ff1744;transform:translateY(50%);pointer-events:none;z-index:10;"></div>';
+                        echo '<div style="position:absolute;left:0;top:0;width:4px;height:100%;background:#ff1744;pointer-events:none;z-index:10;"></div>';
+                        echo '<div style="position:absolute;right:0;top:0;width:4px;height:100%;background:#ff1744;pointer-events:none;z-index:10;"></div>';
+                        echo '<div style="position:absolute;top:0;left:50%;width:2px;height:100%;background:#ff1744;transform:translateX(-50%);pointer-events:none;z-index:10;"></div>';
+                        echo '<div style="position:absolute;top:0;left:33.333%;width:2px;height:100%;background:#ff1744;transform:translateX(-50%);pointer-events:none;z-index:10;"></div>';
+                        echo '<div style="position:absolute;top:0;left:66.666%;width:2px;height:100%;background:#ff1744;transform:translateX(-50%);pointer-events:none;z-index:10;"></div>';
                         echo '</div>';
                     } else {
                         echo '<div class="flex flex-col gap-2">';

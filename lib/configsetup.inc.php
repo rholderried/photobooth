@@ -1,12 +1,15 @@
 <?php
 
-use Photobooth\Enum\CollageLayoutEnum;
 use Photobooth\Enum\ImageFilterEnum;
 use Photobooth\Enum\MailSecurityTypeEnum;
+use Photobooth\Enum\RemoteStorageTypeEnum;
 use Photobooth\Enum\TimezoneEnum;
+use Photobooth\Service\ApplicationService;
 use Photobooth\Service\ConfigurationService;
 use Photobooth\Service\LanguageService;
+use Photobooth\Service\PrintManagerService;
 use Photobooth\Utility\PathUtility;
+use Photobooth\Utility\StartpageTextPosition;
 
 /*
  ** This file defines the admin panel of photobooth. The admin panel definition is done in a JSON variable and structured as follows
@@ -57,6 +60,7 @@ use Photobooth\Utility\PathUtility;
  **     * 'view' (optional): Accepted values are 'basic', 'advanced' or 'expert'. Defines in which admin panel view mode
  **                          the section is shown or not. Missing parameter defaults to 'expert'.
  **     * 'name': Matches the name of the config variable or array. For type 'button' this has no effect.
+ **     * 'data-theme-field'
  **     * 'type': Values are 'input', 'number', 'range', 'color', 'hidden', 'checkbox', 'multi-select', 'select', 'button'. Defines the actual
  **               input type in the admin panel for this setting.
  **     * 'value': Value is a reference to the actual PB config (i.e. 'value' => $config['dev']['reload_on_error']) and pre-
@@ -78,6 +82,56 @@ use Photobooth\Utility\PathUtility;
 $configurationService = ConfigurationService::getInstance();
 $defaultConfig = $configurationService->getDefaultConfiguration();
 $config = $configurationService->getConfiguration();
+$appVersion = ApplicationService::getInstance()->getVersion();
+
+$mediaCounts = [
+    'original' => PathUtility::countFilesInDirectory(PathUtility::getAbsolutePath('data/tmp')),
+    'deleted' => PathUtility::countFilesInDirectory(PathUtility::getAbsolutePath('data/tmp/deleted')),
+    'framed' => PathUtility::countFilesInDirectory(PathUtility::getAbsolutePath('data/images')),
+    'printed' => PathUtility::countFilesInDirectory(PathUtility::getAbsolutePath('data/print')),
+    'videos' => PathUtility::countFilesInDirectory(PathUtility::getAbsolutePath('private/videos')),
+];
+$mailAddressesCount = 0;
+$mailDb = PathUtility::getAbsolutePath('data/mail_addresses.json');
+if (is_file($mailDb)) {
+    $mailRaw = file_get_contents($mailDb);
+    if ($mailRaw !== false) {
+        $mailDecoded = json_decode($mailRaw, true);
+        if (is_array($mailDecoded)) {
+            $mailAddressesCount = count($mailDecoded);
+        }
+    }
+}
+$printManager = PrintManagerService::getInstance();
+$printDbCount = $printManager->getPrintCountFromDB() ?? 0;
+$languageService = LanguageService::getInstance();
+
+$normalizeLayoutValue = static function ($value): string {
+    return $value instanceof \BackedEnum ? (string) $value->value : (string) $value;
+};
+
+$layoutSelectOptions = [];
+$currentLayoutValue = $normalizeLayoutValue($config['collage']['layout'] ?? '');
+if ($currentLayoutValue !== '') {
+    $layoutSelectOptions[$currentLayoutValue] = $currentLayoutValue;
+}
+
+$layoutsEnabledOptions = [];
+$layoutsEnabledValues = $config['collage']['layouts_enabled'] ?? [];
+$layoutsEnabledValues = is_array($layoutsEnabledValues) ? $layoutsEnabledValues : [];
+foreach ($layoutsEnabledValues as $layoutValue) {
+    $layoutValue = trim($normalizeLayoutValue($layoutValue));
+    if ($layoutValue === '') {
+        continue;
+    }
+    $layoutsEnabledOptions[$layoutValue] = $layoutValue;
+}
+
+$startpageTextPosition = StartpageTextPosition::resolve(
+    $config['ui']['startpage_text_position'] ?? null,
+    $config['logo']['position'] ?? null,
+    $config['logo']['enabled'] ?? null
+);
 
 return [
     'general' => [
@@ -170,12 +224,14 @@ return [
             'type' => 'input',
             'placeholder' => $defaultConfig['start_screen']['title'],
             'name' => 'start_screen[title]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['start_screen']['title'] ?? ''),
         ],
         'start_screen_title_visible' => [
             'view' => 'basic',
             'type' => 'checkbox',
             'name' => 'start_screen[title_visible]',
+            'data-theme-field' => 'true',
             'value' => $config['start_screen']['title_visible'],
         ],
         'start_screen_subtitle' => [
@@ -183,12 +239,14 @@ return [
             'type' => 'input',
             'placeholder' => $defaultConfig['start_screen']['subtitle'],
             'name' => 'start_screen[subtitle]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['start_screen']['subtitle'] ?? ''),
         ],
         'start_screen_subtitle_visible' => [
             'view' => 'basic',
             'type' => 'checkbox',
             'name' => 'start_screen[subtitle_visible]',
+            'data-theme-field' => 'true',
             'value' => $config['start_screen']['subtitle_visible'],
         ],
         'picture_thumb_size' => [
@@ -217,6 +275,11 @@ return [
             'type' => 'checkbox',
             'name' => 'dev[reload_on_error]',
             'value' => $config['dev']['reload_on_error'],
+        ],
+        'webserver_url' => [
+            'type' => 'hidden',
+            'name' => 'webserver[url]',
+            'value' => $defaultConfig['webserver']['url'],
         ],
         'webserver_ssid' => [
             'view' => 'expert',
@@ -327,6 +390,12 @@ return [
             'name' => 'FILESUPLOAD',
             'value' => 'filesupload-btn',
         ],
+        'theme_manager' => [
+            'view' => 'basic',
+            'type' => 'theme',
+            'name' => 'theme[manager]',
+            'current' => $config['theme']['current'] ?? '',
+        ],
     ],
     'frontpage' => [
         'view' => 'basic',
@@ -364,6 +433,7 @@ return [
             'view' => 'basic',
             'type' => 'checkbox',
             'name' => 'event[enabled]',
+            'data-theme-field' => 'true',
             'value' => $config['event']['enabled'],
         ],
         'event_textLeft' => [
@@ -371,6 +441,7 @@ return [
             'type' => 'input',
             'placeholder' => 'Text Left',
             'name' => 'event[textLeft]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['event']['textLeft'] ?? ''),
         ],
         'event_symbol' => [
@@ -393,7 +464,9 @@ return [
                 'fa-light fa-champagne-glasses' => 'Champagne glasses',
                 'fa-gears' => 'Gears',
                 'fa-users' => 'People',
+                'fa-solid fa-sun' => 'Sun',
             ],
+            'data-theme-field' => 'true',
             'value' => $config['event']['symbol'],
         ],
         'event_textRight' => [
@@ -401,6 +474,7 @@ return [
             'type' => 'input',
             'placeholder' => 'Text Right',
             'name' => 'event[textRight]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['event']['textRight'] ?? ''),
         ],
         'button_force_buzzer' => [
@@ -414,12 +488,14 @@ return [
             'type' => 'input',
             'placeholder' => $defaultConfig['button']['buzzer_message'],
             'name' => 'button[buzzer_message]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['button']['buzzer_message'] ?? ''),
         ],
         'logo_enabled' => [
             'view' => 'advanced',
             'type' => 'checkbox',
             'name' => 'logo[enabled]',
+            'data-theme-field' => 'true',
             'value' => $config['logo']['enabled'],
         ],
         'logo_path' => [
@@ -427,6 +503,7 @@ return [
             'type' => 'image',
             'placeholder' => $defaultConfig['logo']['enabled'],
             'name' => 'logo[path]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['logo']['path'] ?? ''),
             'paths' => [
                 PathUtility::getAbsolutePath('resources/img/logo'),
@@ -437,6 +514,7 @@ return [
             'view' => 'advanced',
             'type' => 'select',
             'name' => 'logo[position]',
+            'data-logo-position' => 'true',
             'options' => [
                 'center' => 'center',
                 'top_right' => 'Top Right',
@@ -444,7 +522,151 @@ return [
                 'bottom_right' => 'Bottom Right',
                 'bottom_left' => 'Bottom Left',
             ],
+            'data-theme-field' => 'true',
             'value' => $config['logo']['position'],
+        ],
+        'ui_startpage_text_position' => [
+            'view' => 'advanced',
+            'type' => 'select',
+            'name' => 'ui[startpage_text_position]',
+            'data-theme-field' => 'true',
+            'data-startpage-text-position' => 'true',
+            'options' => [
+                'top' => 'Top Center',
+                'center' => 'Center',
+                'bottom' => 'Bottom Center',
+                'left-top' => 'Left Top',
+                'left-center' => 'Left Center',
+                'left-bottom' => 'Left Bottom',
+                'right-top' => 'Right Top',
+                'right-center' => 'Right Center',
+                'right-bottom' => 'Right Bottom',
+            ],
+            'value' => $startpageTextPosition,
+        ],
+    ],
+    'screensaver' => [
+        'view'                 => 'basic',
+        'platform'             => 'all',
+        'screensaver_enabled'         => [
+            'view'  => 'basic',
+            'type'  => 'checkbox',
+            'name'  => 'screensaver[enabled]',
+            'value' => $config['screensaver']['enabled'],
+        ],
+        'screensaver_preview' => [
+            'view'        => 'basic',
+            'type'        => 'button',
+            'name'        => 'screensaver[preview]',
+            'placeholder' => 'screensaver_preview',
+            'value'       => 'screensaver-preview-btn',
+        ],
+        'screensaver_mode'            => [
+            'view'             => 'basic',
+            'type'             => 'select',
+            'name'        => 'screensaver[mode]',
+            'placeholder' => $defaultConfig['screensaver']['mode'],
+            'data-theme-field' => 'true',
+            'options'          => [
+                'image'   => 'image',
+                'video'   => 'video',
+                'folder'  => 'folder',
+                'gallery' => 'gallery',
+            ],
+            'value'       => $config['screensaver']['mode'],
+        ],
+        'screensaver_image_source'    => [
+            'view'             => 'basic',
+            'type'             => 'image',
+            'name'        => 'screensaver[image_source]',
+            'data-theme-field' => 'true',
+            'placeholder' => $defaultConfig['screensaver']['image_source'],
+            'value'       => htmlentities($config['screensaver']['image_source'] ?? ''),
+            'paths'            => [
+                PathUtility::getAbsolutePath('private/screensavers'),
+            ],
+        ],
+        'screensaver_video_source'    => [
+            'view'             => 'basic',
+            'type'             => 'video',
+            'name'        => 'screensaver[video_source]',
+            'data-theme-field' => 'true',
+            'placeholder' => $defaultConfig['screensaver']['video_source'] ?? '',
+            'value'       => htmlentities($config['screensaver']['video_source'] ?? ''),
+            'paths'            => [
+                PathUtility::getAbsolutePath('private/screensavers'),
+            ],
+        ],
+        'screensaver_text'    => [
+            'view'        => 'basic',
+            'type'        => 'input',
+            'name'        => 'screensaver[text]',
+            'data-theme-field' => 'true',
+            'placeholder' => $defaultConfig['screensaver']['text'],
+            'value'       => htmlentities($config['screensaver']['text'] ?? ''),
+        ],
+        'screensaver_text_backdrop_color' => [
+            'view'             => 'basic',
+            'type'             => 'color',
+            'name'             => 'screensaver[text_backdrop_color]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['screensaver']['text_backdrop_color'],
+            'value'            => $config['screensaver']['text_backdrop_color'] ?? '',
+        ],
+        'screensaver_text_backdrop_opacity' => [
+            'view'             => 'basic',
+            'type'             => 'range',
+            'name'             => 'screensaver[text_backdrop_opacity]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['screensaver']['text_backdrop_opacity'],
+            'value'            => $config['screensaver']['text_backdrop_opacity'] ?? $defaultConfig['screensaver']['text_backdrop_opacity'],
+            'range_min'        => 0,
+            'range_max'        => 1,
+            'range_step'       => 0.05,
+            'unit'             => 'empty',
+        ],
+        'screensaver_text_position' => [
+            'view'   => 'basic',
+            'type'   => 'select',
+            'name'   => 'screensaver[text_position]',
+            'value'  => $config['screensaver']['text_position'],
+            'options' => [
+                'top-center' => 'Top Center',
+                'center' => 'Center',
+                'bottom-center' => 'Bottom Center',
+            ],
+        ],
+        'screensaver_timeout_minutes' => [
+            'view'        => 'basic',
+            'type'        => 'number',
+            'name'        => 'screensaver[timeout_minutes]',
+            'placeholder' => $defaultConfig['screensaver']['timeout_minutes'],
+            'value'       => $config['screensaver']['timeout_minutes'],
+            'range_min'   => 0,
+            'range_max'   => 120,
+            'range_step'  => 1,
+            'unit'        => 'min',
+        ],
+        'screensaver_gallery_width'  => [
+            'view'        => 'basic',
+            'type'        => 'number',
+            'name'        => 'screensaver[gallery_width]',
+            'placeholder' => $defaultConfig['screensaver']['gallery_width'],
+            'value'       => $config['screensaver']['gallery_width'],
+            'range_min'   => 1,
+            'range_step'  => 1,
+            'unit'        => 'px',
+        ],
+        'screensaver_switch_seconds'  => [
+            'view'        => 'basic',
+            'type'        => 'number',
+            'name'        => 'screensaver[switch_seconds]',
+            'placeholder' => $defaultConfig['screensaver']['switch_seconds'],
+            'value'       => $config['screensaver']['switch_seconds'],
+            'range_min'   => 1,
+            'range_max'   => 7200,
+            'range_step'  => 1,
+            'unit'        => 'sec',
         ],
     ],
     'pictures' => [
@@ -506,6 +728,7 @@ return [
             'view' => 'basic',
             'type' => 'checkbox',
             'name' => 'picture[polaroid_effect]',
+            'data-theme-field' => 'true',
             'value' => $config['picture']['polaroid_effect'],
         ],
         'picture_polaroid_rotation' => [
@@ -513,6 +736,7 @@ return [
             'type' => 'range',
             'placeholder' => $defaultConfig['picture']['polaroid_rotation'],
             'name' => 'picture[polaroid_rotation]',
+            'data-theme-field' => 'true',
             'value' => $config['picture']['polaroid_rotation'],
             'range_min' => -45,
             'range_max' => 45,
@@ -523,20 +747,34 @@ return [
             'view' => 'advanced',
             'type' => 'checkbox',
             'name' => 'filters[enabled]',
+            'data-theme-field' => 'true',
             'value' => $config['filters']['enabled'],
         ],
         'filters_defaults' => [
             'view' => 'advanced',
             'type' => 'select',
             'name' => 'filters[defaults]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['filters']['defaults'],
             'options' => ImageFilterEnum::cases(),
             'value' => $config['filters']['defaults'],
+        ],
+        'filters_process_size' => [
+            'view' => 'expert',
+            'type' => 'range',
+            'name' => 'filters[process_size]',
+            'placeholder' => $defaultConfig['filters']['process_size'],
+            'value' => $config['filters']['process_size'],
+            'range_min' => 0,
+            'range_max' => 5000,
+            'range_step' => 50,
+            'unit' => 'px',
         ],
         'filters_disabled' => [
             'view' => 'expert',
             'type' => 'multi-select',
             'name' => 'filters[disabled]',
+            'data-theme-field' => 'true',
             'options' => ImageFilterEnum::cases(),
             'value' => $config['filters']['disabled'],
         ],
@@ -544,6 +782,7 @@ return [
             'view' => 'basic',
             'type' => 'checkbox',
             'name' => 'picture[take_frame]',
+            'data-theme-field' => 'true',
             'value' => $config['picture']['take_frame'],
         ],
         'picture_frame' => [
@@ -551,6 +790,7 @@ return [
             'type' => 'image',
             'placeholder' => $defaultConfig['picture']['frame'],
             'name' => 'picture[frame]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['picture']['frame'] ?? ''),
             'paths' => [
                 PathUtility::getAbsolutePath('resources/img/frames'),
@@ -561,6 +801,7 @@ return [
             'view' => 'expert',
             'type' => 'checkbox',
             'name' => 'picture[extend_by_frame]',
+            'data-theme-field' => 'true',
             'value' => $config['picture']['extend_by_frame'],
         ],
         'picture_frame_left_percentage' => [
@@ -568,6 +809,7 @@ return [
             'type' => 'range',
             'placeholder' => $defaultConfig['picture']['frame_left_percentage'],
             'name' => 'picture[frame_left_percentage]',
+            'data-theme-field' => 'true',
             'value' => $config['picture']['frame_left_percentage'],
             'range_min' => 0,
             'range_max' => 40,
@@ -579,6 +821,7 @@ return [
             'type' => 'range',
             'placeholder' => $defaultConfig['picture']['frame_right_percentage'],
             'name' => 'picture[frame_right_percentage]',
+            'data-theme-field' => 'true',
             'value' => $config['picture']['frame_right_percentage'],
             'range_min' => 0,
             'range_max' => 40,
@@ -590,6 +833,7 @@ return [
             'type' => 'range',
             'placeholder' => $defaultConfig['picture']['frame_top_percentage'],
             'name' => 'picture[frame_top_percentage]',
+            'data-theme-field' => 'true',
             'value' => $config['picture']['frame_top_percentage'],
             'range_min' => 0,
             'range_max' => 40,
@@ -601,6 +845,7 @@ return [
             'type' => 'range',
             'placeholder' => $defaultConfig['picture']['frame_bottom_percentage'],
             'name' => 'picture[frame_bottom_percentage]',
+            'data-theme-field' => 'true',
             'value' => $config['picture']['frame_bottom_percentage'],
             'range_min' => 0,
             'range_max' => 40,
@@ -618,6 +863,7 @@ return [
             'view' => 'advanced',
             'type' => 'select',
             'name' => 'picture[naming]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['picture']['naming'],
             'options' => [
                 'dateformatted' => 'Date formatted',
@@ -654,12 +900,14 @@ return [
             'view' => 'advanced',
             'type' => 'checkbox',
             'name' => 'textonpicture[enabled]',
+            'data-theme-field' => 'true',
             'value' => $config['textonpicture']['enabled'],
         ],
         'textonpicture_line1' => [
             'view' => 'advanced',
             'type' => 'input',
             'placeholder' => $defaultConfig['textonpicture']['line1'],
+            'data-theme-field' => 'true',
             'name' => 'textonpicture[line1]',
             'value' => htmlentities($config['textonpicture']['line1'] ?? ''),
         ],
@@ -667,6 +915,7 @@ return [
             'view' => 'advanced',
             'type' => 'input',
             'placeholder' => $defaultConfig['textonpicture']['line2'],
+            'data-theme-field' => 'true',
             'name' => 'textonpicture[line2]',
             'value' => htmlentities($config['textonpicture']['line2'] ?? ''),
         ],
@@ -674,6 +923,7 @@ return [
             'view' => 'advanced',
             'type' => 'input',
             'placeholder' => $defaultConfig['textonpicture']['line3'],
+            'data-theme-field' => 'true',
             'name' => 'textonpicture[line3]',
             'value' => htmlentities($config['textonpicture']['line3'] ?? ''),
         ],
@@ -682,6 +932,7 @@ return [
             'type' => 'number',
             'placeholder' => $defaultConfig['textonpicture']['locationx'],
             'name' => 'textonpicture[locationx]',
+            'data-theme-field' => 'true',
             'value' => $config['textonpicture']['locationx'],
         ],
         'textonpicture_locationy' => [
@@ -689,6 +940,7 @@ return [
             'type' => 'number',
             'placeholder' => $defaultConfig['textonpicture']['locationy'],
             'name' => 'textonpicture[locationy]',
+            'data-theme-field' => 'true',
             'value' => $config['textonpicture']['locationy'],
         ],
         'textonpicture_rotation' => [
@@ -696,6 +948,7 @@ return [
             'type' => 'range',
             'placeholder' => $defaultConfig['textonpicture']['rotation'],
             'name' => 'textonpicture[rotation]',
+            'data-theme-field' => 'true',
             'value' => $config['textonpicture']['rotation'],
             'range_min' => -180,
             'range_max' => 180,
@@ -707,6 +960,7 @@ return [
             'type' => 'font',
             'placeholder' => $defaultConfig['textonpicture']['font'],
             'name' => 'textonpicture[font]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['textonpicture']['font'] ?? ''),
             'paths' => [
                 PathUtility::getAbsolutePath('resources/fonts'),
@@ -716,6 +970,7 @@ return [
         'textonpicture_font_color' => [
             'view' => 'expert',
             'type' => 'color',
+            'data-theme-field' => 'true',
             'name' => 'textonpicture[font_color]',
             'placeholder' => $defaultConfig['textonpicture']['font_color'],
             'value' => $config['textonpicture']['font_color'],
@@ -723,6 +978,7 @@ return [
         'textonpicture_font_size' => [
             'view' => 'advanced',
             'type' => 'number',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['textonpicture']['font_size'],
             'name' => 'textonpicture[font_size]',
             'value' => $config['textonpicture']['font_size'],
@@ -730,6 +986,7 @@ return [
         'textonpicture_linespace' => [
             'view' => 'expert',
             'type' => 'number',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['textonpicture']['linespace'],
             'name' => 'textonpicture[linespace]',
             'value' => $config['textonpicture']['linespace'],
@@ -772,12 +1029,41 @@ return [
             'unit' => 'seconds',
         ],
         'collage_layout' => [
-            'view' => 'advanced',
+            'view' => 'basic',
             'type' => 'select',
             'name' => 'collage[layout]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['collage']['layout'],
-            'options' => CollageLayoutEnum::cases(),
+            'options' => $layoutSelectOptions,
             'value' => $config['collage']['layout'],
+        ],
+        'collage_allow_selection' => [
+            'view' => 'advanced',
+            'type' => 'checkbox',
+            'name' => 'collage[allow_selection]',
+            'value' => $config['collage']['allow_selection'],
+        ],
+        'collage_layouts_enabled' => [
+            'view' => 'advanced',
+            'type' => 'toggle-button-group-modal',
+            'name' => 'collage[layouts_enabled]',
+            'button_label' => 'choose_layouts',
+            'placeholder' => $defaultConfig['collage']['layouts_enabled'],
+            'options' => $layoutsEnabledOptions,
+            'preview_orientation' => $config['collage']['orientation'] ?? 'landscape',
+            'value' => $config['collage']['layouts_enabled'],
+        ],
+        'collage_orientation' => [
+            'view' => 'basic',
+            'type' => 'select',
+            'name' => 'collage[orientation]',
+            'data-theme-field' => 'true',
+            'placeholder' => $defaultConfig['collage']['orientation'],
+            'options' => [
+                'landscape' => 'Landscape image capture',
+                'portrait' => 'Portrait image capture',
+            ],
+            'value' => $config['collage']['orientation'],
         ],
         'layout_generator' => [
             'view' => 'expert',
@@ -786,23 +1072,11 @@ return [
             'name' => 'LAYOUTGENERATOR',
             'value' => 'layout-generator',
         ],
-        'collage_resolution' => [
-            'view' => 'expert',
-            'type' => 'select',
-            'name' => 'collage[resolution]',
-            'placeholder' => $defaultConfig['collage']['resolution'],
-            'options' => [
-                '150dpi' => '150 dpi',
-                '300dpi' => '300 dpi',
-                '400dpi' => '400 dpi',
-                '600dpi' => '600 dpi',
-            ],
-            'value' => $config['collage']['resolution'],
-        ],
         'collage_dashedline_color' => [
             'view' => 'advanced',
             'type' => 'color',
             'name' => 'collage[dashedline_color]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['collage']['dashedline_color'],
             'value' => $config['collage']['dashedline_color'],
         ],
@@ -810,6 +1084,7 @@ return [
             'view' => 'advanced',
             'type' => 'checkbox',
             'name' => 'collage[keep_single_images]',
+            'data-theme-field' => 'true',
             'value' => $config['collage']['keep_single_images'],
         ],
         'collage_key' => [
@@ -823,6 +1098,7 @@ return [
             'view' => 'basic',
             'type' => 'color',
             'name' => 'collage[background_color]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['collage']['background_color'],
             'value' => $config['collage']['background_color'],
         ],
@@ -830,6 +1106,7 @@ return [
             'view' => 'advanced',
             'type' => 'select',
             'name' => 'collage[take_frame]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['collage']['take_frame'],
             'options' => [
                 'off' => 'Off',
@@ -843,17 +1120,38 @@ return [
             'type' => 'image',
             'placeholder' => $defaultConfig['collage']['frame'],
             'name' => 'collage[frame]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['collage']['frame'] ?? ''),
             'paths' => [
                 PathUtility::getAbsolutePath('resources/img/frames'),
                 PathUtility::getAbsolutePath('private/images/frames'),
             ]
         ],
+        'collage_polaroid_effect' => [
+            'view' => 'basic',
+            'type' => 'checkbox',
+            'name' => 'collage[polaroid_effect]',
+            'data-theme-field' => 'true',
+            'value' => $config['collage']['polaroid_effect'],
+        ],
+        'collage_polaroid_rotation' => [
+            'view' => 'advanced',
+            'type' => 'range',
+            'placeholder' => $defaultConfig['collage']['polaroid_rotation'],
+            'name' => 'collage[polaroid_rotation]',
+            'data-theme-field' => 'true',
+            'value' => $config['collage']['polaroid_rotation'],
+            'range_min' => -45,
+            'range_max' => 45,
+            'range_step' => 1,
+            'unit' => 'degrees',
+        ],
         'collage_background' => [
             'view' => 'expert',
             'type' => 'image',
             'placeholder' => $defaultConfig['collage']['background'],
             'name' => 'collage[background]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['collage']['background'] ?? ''),
             'paths' => [
                 PathUtility::getAbsolutePath('resources/img/background'),
@@ -864,6 +1162,7 @@ return [
             'view' => 'expert',
             'type' => 'checkbox',
             'name' => 'collage[placeholder]',
+            'data-theme-field' => 'true',
             'value' => $config['collage']['placeholder'],
         ],
         'collage_placeholderposition' => [
@@ -871,6 +1170,7 @@ return [
             'type' => 'number',
             'placeholder' => $defaultConfig['collage']['placeholderposition'],
             'name' => 'collage[placeholderposition]',
+            'data-theme-field' => 'true',
             'value' => $config['collage']['placeholderposition'],
         ],
         'collage_placeholderpath' => [
@@ -878,6 +1178,7 @@ return [
             'type' => 'image',
             'placeholder' => $defaultConfig['collage']['placeholderpath'],
             'name' => 'collage[placeholderpath]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['collage']['placeholderpath'] ?? ''),
             'paths' => [
                 PathUtility::getAbsolutePath('resources/img/demo'),
@@ -888,6 +1189,7 @@ return [
             'view' => 'advanced',
             'type' => 'checkbox',
             'name' => 'textoncollage[enabled]',
+            'data-theme-field' => 'true',
             'value' => $config['textoncollage']['enabled'],
         ],
         'textoncollage_line1' => [
@@ -895,6 +1197,7 @@ return [
             'type' => 'input',
             'placeholder' => $defaultConfig['textoncollage']['line1'],
             'name' => 'textoncollage[line1]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['textoncollage']['line1'] ?? ''),
         ],
         'textoncollage_line2' => [
@@ -902,6 +1205,7 @@ return [
             'type' => 'input',
             'placeholder' => $defaultConfig['textoncollage']['line2'],
             'name' => 'textoncollage[line2]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['textoncollage']['line2'] ?? ''),
         ],
         'textoncollage_line3' => [
@@ -909,6 +1213,7 @@ return [
             'type' => 'input',
             'placeholder' => $defaultConfig['textoncollage']['line3'],
             'name' => 'textoncollage[line3]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['textoncollage']['line3'] ?? ''),
         ],
         'textoncollage_locationx' => [
@@ -916,6 +1221,7 @@ return [
             'type' => 'number',
             'placeholder' => $defaultConfig['textoncollage']['locationx'],
             'name' => 'textoncollage[locationx]',
+            'data-theme-field' => 'true',
             'value' => $config['textoncollage']['locationx'],
         ],
         'textoncollage_locationy' => [
@@ -923,6 +1229,7 @@ return [
             'type' => 'number',
             'placeholder' => $defaultConfig['textoncollage']['locationy'],
             'name' => 'textoncollage[locationy]',
+            'data-theme-field' => 'true',
             'value' => $config['textoncollage']['locationy'],
         ],
         'textoncollage_rotation' => [
@@ -930,6 +1237,7 @@ return [
             'type' => 'range',
             'placeholder' => $defaultConfig['textoncollage']['rotation'],
             'name' => 'textoncollage[rotation]',
+            'data-theme-field' => 'true',
             'value' => $config['textoncollage']['rotation'],
             'range_min' => -180,
             'range_max' => 180,
@@ -941,6 +1249,7 @@ return [
             'type' => 'font',
             'placeholder' => $defaultConfig['textoncollage']['font'],
             'name' => 'textoncollage[font]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['textoncollage']['font'] ?? ''),
             'paths' => [
                 PathUtility::getAbsolutePath('resources/fonts'),
@@ -951,6 +1260,7 @@ return [
             'view' => 'expert',
             'type' => 'color',
             'name' => 'textoncollage[font_color]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['textoncollage']['font_color'],
             'value' => $config['textoncollage']['font_color'],
         ],
@@ -959,6 +1269,7 @@ return [
             'type' => 'number',
             'placeholder' => $defaultConfig['textoncollage']['font_size'],
             'name' => 'textoncollage[font_size]',
+            'data-theme-field' => 'true',
             'value' => $config['textoncollage']['font_size'],
         ],
         'textoncollage_linespace' => [
@@ -966,6 +1277,7 @@ return [
             'type' => 'number',
             'placeholder' => $defaultConfig['textoncollage']['linespace'],
             'name' => 'textoncollage[linespace]',
+            'data-theme-field' => 'true',
             'value' => $config['textoncollage']['linespace'],
         ],
         'collage_limit' => [
@@ -1007,6 +1319,7 @@ return [
             'type' => 'input',
             'placeholder' => $defaultConfig['custom']['btn_text'],
             'name' => 'custom[btn_text]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['custom']['btn_text'] ?? ''),
         ],
         'get_request_custom' => [
@@ -1018,8 +1331,111 @@ return [
         'icons_take_custom' => [
             'type' => 'icon',
             'name' => 'icons[take_custom]',
+            'data-theme-field' => 'true',
             'placeholder' => htmlentities($defaultConfig['icons']['take_custom'] ?? ''),
             'value' => htmlentities($config['icons']['take_custom'] ?? ''),
+        ],
+    ],
+    'magic_greenscreen' => [
+        'view' => 'basic',
+        'rembg_enabled' => [
+            'view' => 'basic',
+            'type' => 'checkbox',
+            'name' => 'rembg[enabled]',
+            'data-theme-field' => 'true',
+            'value' => $config['rembg']['enabled'],
+        ],
+        'rembg_background' => [
+            'view' => 'basic',
+            'type' => 'image',
+            'data-theme-field' => 'true',
+            'placeholder' => $defaultConfig['rembg']['background'],
+            'name' => 'rembg[background]',
+            'value' => htmlentities($config['rembg']['background'] ?? ''),
+            'paths' => [
+                PathUtility::getAbsolutePath('resources/img/background'),
+                PathUtility::getAbsolutePath('private/images/background'),
+            ]
+        ],
+        'rembg_backgroundMode' => [
+            'view' => 'advanced',
+            'type' => 'select',
+            'name' => 'rembg[backgroundMode]',
+            'placeholder' => $defaultConfig['rembg']['backgroundMode'],
+            'data-theme-field' => 'true',
+            'options' => [
+                'scale-fill' => 'Scale Fill (Cover canvas, preserve ratio)',
+                'scale-fit' => 'Scale Fit (Fit inside, black bars)',
+                'crop-center' => 'Crop Center (Cut from center)',
+                'stretch' => 'Stretch (Distort to fit)',
+                'none' => 'None (Direct copy, no scaling)',
+            ],
+            'value' => $config['rembg']['backgroundMode'],
+        ],
+        'rembg_model' => [
+            'view' => 'advanced',
+            'type' => 'select',
+            'name' => 'rembg[model]',
+            'placeholder' => $defaultConfig['rembg']['model'],
+            'options' => [
+                'u2net' => 'u2net (default)',
+                'u2netp' => 'u2netp (fast)',
+                'u2net_cloth_seg' => 'u2net_cloth_seg (Cloths)',
+                'u2net_human_seg' => 'u2net_human_seg (Human)',
+                'silueta' => 'silueta',
+                'isnet_general_use' => 'isnet_general_use (new)',
+                'isnet_anime' => 'isnet_anime',
+            ],
+            'value' => $config['rembg']['model'],
+        ],
+        'rembg_alpha_matting' => [
+            'view' => 'advanced',
+            'type' => 'checkbox',
+            'name' => 'rembg[alpha_matting]',
+            'data-theme-field' => 'true',
+            'value' => $config['rembg']['alpha_matting'],
+        ],
+        'rembg_alpha_matting_foreground_threshold' => [
+            'view' => 'expert',
+            'type' => 'range',
+            'data-theme-field' => 'true',
+            'placeholder' => $defaultConfig['rembg']['alpha_matting_foreground_threshold'],
+            'name' => 'rembg[alpha_matting_foreground_threshold]',
+            'value' => $config['rembg']['alpha_matting_foreground_threshold'],
+            'range_min' => 0,
+            'range_max' => 255,
+            'range_step' => 1,
+            'unit' => 'empty',
+        ],
+        'rembg_alpha_matting_background_threshold' => [
+            'view' => 'expert',
+            'type' => 'range',
+            'data-theme-field' => 'true',
+            'placeholder' => $defaultConfig['rembg']['alpha_matting_background_threshold'],
+            'name' => 'rembg[alpha_matting_background_threshold]',
+            'value' => $config['rembg']['alpha_matting_background_threshold'],
+            'range_min' => 0,
+            'range_max' => 255,
+            'range_step' => 1,
+            'unit' => 'empty',
+        ],
+        'rembg_alpha_matting_erode_size' => [
+            'view' => 'expert',
+            'type' => 'range',
+            'data-theme-field' => 'true',
+            'placeholder' => $defaultConfig['rembg']['alpha_matting_erode_size'],
+            'name' => 'rembg[alpha_matting_erode_size]',
+            'value' => $config['rembg']['alpha_matting_erode_size'],
+            'range_min' => 0,
+            'range_max' => 255,
+            'range_step' => 1,
+            'unit' => 'empty',
+        ],
+        'rembg_post_processing' => [
+            'view' => 'expert',
+            'type' => 'checkbox',
+            'name' => 'rembg[post_processing]',
+            'value' => $config['rembg']['post_processing'],
         ],
     ],
     'video' => [
@@ -1115,6 +1531,26 @@ return [
             'type' => 'checkbox',
             'name' => 'gallery[use_slideshow]',
             'value' => $config['gallery']['use_slideshow'],
+        ],
+        'gallery_use_thumb' => [
+            'view' => 'advanced',
+            'type' => 'checkbox',
+            'name' => 'gallery[use_thumb]',
+            'value' => $config['gallery']['use_thumb'],
+        ],
+        'gallery_picture_width' => [
+            'view' => 'expert',
+            'type' => 'number',
+            'placeholder' => $defaultConfig['gallery']['picture_width'],
+            'name' => 'gallery[picture_width]',
+            'value' => $config['gallery']['picture_width'],
+        ],
+        'gallery_picture_height' => [
+            'view' => 'expert',
+            'type' => 'number',
+            'placeholder' => $defaultConfig['gallery']['picture_height'],
+            'name' => 'gallery[picture_height]',
+            'value' => $config['gallery']['picture_height'],
         ],
         'gallery_pictureTime' => [
             'view' => 'advanced',
@@ -1359,7 +1795,7 @@ return [
         'preview_url' => [
             'type' => 'input',
             'name' => 'preview[url]',
-            'placeholder' => 'url(http://localhost:8081)',
+            'placeholder' => 'http://localhost:8081',
             'value' => htmlentities($config['preview']['url'] ?? ''),
         ],
         'preview_url_delay' => [
@@ -1384,6 +1820,20 @@ return [
             'name' => 'preview[videoHeight]',
             'placeholder' => $defaultConfig['preview']['videoHeight'],
             'value' => $config['preview']['videoHeight'],
+        ],
+        'preview_videoWidth_collage'  => [
+            'view'        => 'expert',
+            'type'        => 'number',
+            'name'        => 'preview[videoWidth_collage]',
+            'placeholder' => $defaultConfig['preview']['videoWidth_collage'],
+            'value'       => $config['preview']['videoWidth_collage'],
+        ],
+        'preview_videoHeight_collage' => [
+            'view'        => 'expert',
+            'type'        => 'number',
+            'name'        => 'preview[videoHeight_collage]',
+            'placeholder' => $defaultConfig['preview']['videoHeight_collage'],
+            'value'       => $config['preview']['videoHeight_collage'],
         ],
         'preview_camera_mode' => [
             'type' => 'select',
@@ -1461,6 +1911,7 @@ return [
             'view' => 'expert',
             'type' => 'checkbox',
             'name' => 'keying[private_backgrounds]',
+            'data-theme-field' => 'true',
             'value' => $config['keying']['private_backgrounds'],
         ],
         'keying_show_all' => [
@@ -1519,10 +1970,21 @@ return [
             'placeholder' => $defaultConfig['print']['time'],
             'name' => 'print[time]',
             'value' => $config['print']['time'],
-            'range_min' => 250,
-            'range_max' => 20000,
-            'range_step' => 250,
+            'range_min' => 500,
+            'range_max' => 60000,
+            'range_step' => 500,
             'unit' => 'milliseconds',
+        ],
+        'max_multiple_prints' => [
+            'view' => 'advanced',
+            'type' => 'range',
+            'placeholder' => $defaultConfig['print']['max_multi'],
+            'name' => 'print[max_multi]',
+            'value' => $config['print']['max_multi'],
+            'range_min' => 1,
+            'range_max' => 10,
+            'range_step' => 1,
+            'unit' => 'empty',
         ],
         'print_limit' => [
             'view' => 'expert',
@@ -1575,6 +2037,7 @@ return [
             'view' => 'expert',
             'type' => 'checkbox',
             'name' => 'print[qrcode]',
+            'data-theme-field' => 'true',
             'value' => $config['print']['qrcode'],
         ],
         'print_qrSize' => [
@@ -1586,6 +2049,7 @@ return [
             'range_min' => 4,
             'range_max' => 10,
             'range_step' => 2,
+            'data-theme-field' => 'true',
             'unit' => 'empty',
         ],
         'print_qrPosition' => [
@@ -1601,6 +2065,7 @@ return [
                 'bottomRight' => 'bottom right',
                 'bottom' => 'bottom',
                 'bottomLeft' => 'bottom left',
+                'data-theme-field' => 'true',
                 'left' => 'left',
             ],
             'value' => $config['print']['qrPosition'],
@@ -1610,6 +2075,7 @@ return [
             'type' => 'number',
             'placeholder' => $defaultConfig['print']['qrOffset'],
             'name' => 'print[qrOffset]',
+            'data-theme-field' => 'true',
             'value' => $config['print']['qrOffset'],
         ],
         'print_qrMargin' => [
@@ -1621,12 +2087,14 @@ return [
             'range_min' => 0,
             'range_max' => 10,
             'range_step' => 1,
+            'data-theme-field' => 'true',
             'unit' => 'empty',
         ],
         'print_qrBgColor' => [
             'view' => 'expert',
             'type' => 'color',
             'name' => 'print[qrBgColor]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['print']['qrBgColor'],
             'value' => $config['print']['qrBgColor'],
         ],
@@ -1634,6 +2102,7 @@ return [
             'view' => 'expert',
             'type' => 'checkbox',
             'name' => 'print[print_frame]',
+            'data-theme-field' => 'true',
             'value' => $config['print']['print_frame'],
         ],
         'print_frame' => [
@@ -1641,6 +2110,7 @@ return [
             'type' => 'image',
             'placeholder' => $defaultConfig['print']['frame'],
             'name' => 'print[frame]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['print']['frame'] ?? ''),
             'paths' => [
                 PathUtility::getAbsolutePath('resources/img/frames'),
@@ -1671,6 +2141,7 @@ return [
             'view' => 'advanced',
             'type' => 'checkbox',
             'name' => 'textonprint[enabled]',
+            'data-theme-field' => 'true',
             'value' => $config['textonprint']['enabled'],
         ],
         'textonprint_line1' => [
@@ -1678,6 +2149,7 @@ return [
             'type' => 'input',
             'placeholder' => $defaultConfig['textonprint']['line1'],
             'name' => 'textonprint[line1]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['textonprint']['line1'] ?? ''),
         ],
         'textonprint_line2' => [
@@ -1685,6 +2157,7 @@ return [
             'type' => 'input',
             'placeholder' => $defaultConfig['textonprint']['line2'],
             'name' => 'textonprint[line2]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['textonprint']['line2'] ?? ''),
         ],
         'textonprint_line3' => [
@@ -1692,6 +2165,7 @@ return [
             'type' => 'input',
             'placeholder' => $defaultConfig['textonprint']['line3'],
             'name' => 'textonprint[line3]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['textonprint']['line3'] ?? ''),
         ],
         'textonprint_locationx' => [
@@ -1699,6 +2173,7 @@ return [
             'type' => 'number',
             'placeholder' => $defaultConfig['textonprint']['locationx'],
             'name' => 'textonprint[locationx]',
+            'data-theme-field' => 'true',
             'value' => $config['textonprint']['locationx'],
         ],
         'textonprint_locationy' => [
@@ -1706,6 +2181,7 @@ return [
             'type' => 'number',
             'placeholder' => $defaultConfig['textonprint']['locationy'],
             'name' => 'textonprint[locationy]',
+            'data-theme-field' => 'true',
             'value' => $config['textonprint']['locationy'],
         ],
         'textonprint_rotation' => [
@@ -1713,6 +2189,7 @@ return [
             'type' => 'range',
             'placeholder' => $defaultConfig['textonprint']['rotation'],
             'name' => 'textonprint[rotation]',
+            'data-theme-field' => 'true',
             'value' => $config['textonprint']['rotation'],
             'range_min' => -180,
             'range_max' => 180,
@@ -1724,6 +2201,7 @@ return [
             'type' => 'font',
             'placeholder' => $defaultConfig['textonprint']['font'],
             'name' => 'textonprint[font]',
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['textonprint']['font'] ?? ''),
             'paths' => [
                 PathUtility::getAbsolutePath('resources/fonts'),
@@ -1734,6 +2212,7 @@ return [
             'view' => 'expert',
             'type' => 'color',
             'name' => 'textonprint[font_color]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['textonprint']['font_color'],
             'value' => $config['textonprint']['font_color'],
         ],
@@ -1742,6 +2221,7 @@ return [
             'type' => 'number',
             'placeholder' => $defaultConfig['textonprint']['font_size'],
             'name' => 'textonprint[font_size]',
+            'data-theme-field' => 'true',
             'value' => $config['textonprint']['font_size'],
         ],
         'textonprint_linespace' => [
@@ -1749,6 +2229,7 @@ return [
             'type' => 'number',
             'placeholder' => $defaultConfig['textonprint']['linespace'],
             'name' => 'textonprint[linespace]',
+            'data-theme-field' => 'true',
             'value' => $config['textonprint']['linespace'],
         ],
     ],
@@ -1804,6 +2285,7 @@ return [
             'view' => 'basic',
             'type' => 'checkbox',
             'name' => 'qr[enabled]',
+            'data-theme-field' => 'true',
             'value' => $config['qr']['enabled'],
         ],
         'qr_url' => [
@@ -1818,6 +2300,13 @@ return [
             'type' => 'checkbox',
             'name' => 'qr[append_filename]',
             'value' => $config['qr']['append_filename'],
+        ],
+        'qr_short_text' => [
+            'view' => 'advanced',
+            'type' => 'input',
+            'placeholder' => $defaultConfig['qr']['short_text'],
+            'name' => 'qr[short_text]',
+            'value' => htmlentities($config['qr']['short_text'] ?? ''),
         ],
         'qr_custom_text' => [
             'view' => 'advanced',
@@ -1835,6 +2324,7 @@ return [
         'qr_result' => [
             'type' => 'select',
             'name' => 'qr[result]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['qr']['result'],
             'options' => [
                 'hidden' => 'hidden',
@@ -1852,6 +2342,7 @@ return [
         'qr_pswp' => [
             'type' => 'select',
             'name' => 'qr[pswp]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['qr']['pswp'],
             'options' => [
                 'hidden' => 'hidden',
@@ -2035,6 +2526,13 @@ return [
             'name' => 'remotebuzzer[port]',
             'value' => $config['remotebuzzer']['port'],
         ],
+        'remotebuzzer_input_device' => [
+            'view' => 'expert',
+            'type' => 'input',
+            'name' => 'remotebuzzer[input_device]',
+            'placeholder' => '/dev/input/by-id/...',
+            'value' => $config['remotebuzzer']['input_device'],
+        ],
         'remotebuzzer_usebuttons' => [
             'view' => 'advanced',
             'type' => 'checkbox',
@@ -2047,28 +2545,11 @@ return [
             'name' => 'remotebuzzer[userotary]',
             'value' => $config['remotebuzzer']['userotary'],
         ],
-        'remotebuzzer_usegpio' => [
-            'view' => 'experimental',
-            'type' => 'checkbox',
-            'name' => 'remotebuzzer[usegpio]',
-            'value' => $config['remotebuzzer']['usegpio'],
-        ],
         'remotebuzzer_picturebutton' => [
             'view' => 'advanced',
             'type' => 'checkbox',
             'name' => 'remotebuzzer[picturebutton]',
             'value' => $config['remotebuzzer']['picturebutton'],
-        ],
-        'remotebuzzer_collagetime' => [
-            'view' => 'experimental',
-            'type' => 'range',
-            'placeholder' => $defaultConfig['remotebuzzer']['collagetime'],
-            'name' => 'remotebuzzer[collagetime]',
-            'value' => $config['remotebuzzer']['collagetime'],
-            'range_min' => 1,
-            'range_max' => 6,
-            'range_step' => 1,
-            'unit' => 'seconds',
         ],
         'remotebuzzer_collagebutton' => [
             'view' => 'advanced',
@@ -2100,17 +2581,6 @@ return [
             'name' => 'remotebuzzer[shutdownbutton]',
             'value' => $config['remotebuzzer']['shutdownbutton'],
         ],
-        'remotebuzzer_shutdownholdtime' => [
-            'view' => 'experimental',
-            'type' => 'range',
-            'placeholder' => $defaultConfig['remotebuzzer']['shutdownholdtime'],
-            'name' => 'remotebuzzer[shutdownholdtime]',
-            'value' => $config['remotebuzzer']['shutdownholdtime'],
-            'range_min' => 0,
-            'range_max' => 9,
-            'range_step' => 1,
-            'unit' => 'seconds',
-        ],
         'remotebuzzer_move2usbbutton' => [
             'view' => 'expert',
             'type' => 'select',
@@ -2129,233 +2599,11 @@ return [
             'name' => 'remotebuzzer[rebootbutton]',
             'value' => $config['remotebuzzer']['rebootbutton'],
         ],
-        'remotebuzzer_rebootholdtime' => [
-            'view' => 'experimental',
-            'type' => 'range',
-            'placeholder' => $defaultConfig['remotebuzzer']['rebootholdtime'],
-            'name' => 'remotebuzzer[rebootholdtime]',
-            'value' => $config['remotebuzzer']['rebootholdtime'],
-            'range_min' => 0,
-            'range_max' => 9,
-            'range_step' => 1,
-            'unit' => 'seconds',
-        ],
-        'remotebuzzer_useleds' => [
-            'view' => 'experimental',
-            'type' => 'checkbox',
-            'name' => 'remotebuzzer[useleds]',
-            'value' => $config['remotebuzzer']['useleds'],
-        ],
-        'remotebuzzer_photolight' => [
-            'view' => 'experimental',
-            'type' => 'checkbox',
-            'name' => 'remotebuzzer[photolight]',
-            'value' => $config['remotebuzzer']['photolight'],
-        ],
-        'remotebuzzer_pictureled' => [
-            'view' => 'experimental',
-            'type' => 'checkbox',
-            'name' => 'remotebuzzer[pictureled]',
-            'value' => $config['remotebuzzer']['pictureled'],
-        ],
-        'remotebuzzer_collageled' => [
-            'view' => 'experimental',
-            'type' => 'checkbox',
-            'name' => 'remotebuzzer[collageled]',
-            'value' => $config['remotebuzzer']['collageled'],
-        ],
-        'remotebuzzer_customled' => [
-            'view' => 'experimental',
-            'type' => 'checkbox',
-            'name' => 'remotebuzzer[customled]',
-            'value' => $config['remotebuzzer']['customled'],
-        ],
-        'remotebuzzer_videoled' => [
-            'view' => 'experimental',
-            'type' => 'checkbox',
-            'name' => 'remotebuzzer[videoled]',
-            'value' => $config['remotebuzzer']['videoled'],
-        ],
-        'remotebuzzer_shutdownled' => [
-            'view' => 'experimental',
-            'type' => 'checkbox',
-            'name' => 'remotebuzzer[shutdownled]',
-            'value' => $config['remotebuzzer']['shutdownled'],
-        ],
-        'remotebuzzer_rebootled' => [
-            'view' => 'experimental',
-            'type' => 'checkbox',
-            'name' => 'remotebuzzer[rebootled]',
-            'value' => $config['remotebuzzer']['rebootled'],
-        ],
-        'remotebuzzer_printled' => [
-            'view' => 'experimental',
-            'type' => 'checkbox',
-            'name' => 'remotebuzzer[printled]',
-            'value' => $config['remotebuzzer']['printled'],
-        ],
-        'remotebuzzer_move2usbled' => [
-            'view' => 'experimental',
-            'type' => 'checkbox',
-            'name' => 'remotebuzzer[move2usbled]',
-            'value' => $config['remotebuzzer']['move2usbled'],
-        ],
         'remotebuzzer_enable_standalonegallery' => [
             'view' => 'expert',
             'type' => 'checkbox',
             'name' => 'remotebuzzer[enable_standalonegallery]',
             'value' => $config['remotebuzzer']['enable_standalonegallery'],
-        ],
-        'remotebuzzer_debounce' => [
-            'view' => 'experimental',
-            'type' => 'range',
-            'placeholder' => $defaultConfig['remotebuzzer']['debounce'],
-            'name' => 'remotebuzzer[debounce]',
-            'value' => $config['remotebuzzer']['debounce'],
-            'range_min' => 0,
-            'range_max' => 100,
-            'range_step' => 5,
-            'unit' => 'milliseconds',
-        ],
-        'remotebuzzer_picturegpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['picturegpio'],
-            'name' => 'remotebuzzer[picturegpio]',
-            'value' => $config['remotebuzzer']['picturegpio'],
-        ],
-        'remotebuzzer_collagegpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['collagegpio'],
-            'name' => 'remotebuzzer[collagegpio]',
-            'value' => $config['remotebuzzer']['collagegpio'],
-        ],
-        'remotebuzzer_customgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['customgpio'],
-            'name' => 'remotebuzzer[customgpio]',
-            'value' => $config['remotebuzzer']['customgpio'],
-        ],
-        'remotebuzzer_videogpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['videogpio'],
-            'name' => 'remotebuzzer[videogpio]',
-            'value' => $config['remotebuzzer']['videogpio'],
-        ],
-        'remotebuzzer_printgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['printgpio'],
-            'name' => 'remotebuzzer[printgpio]',
-            'value' => $config['remotebuzzer']['printgpio'],
-        ],
-        'remotebuzzer_shutdowngpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['shutdowngpio'],
-            'name' => 'remotebuzzer[shutdowngpio]',
-            'value' => $config['remotebuzzer']['shutdowngpio'],
-        ],
-        'remotebuzzer_rebootgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['rebootgpio'],
-            'name' => 'remotebuzzer[rebootgpio]',
-            'value' => $config['remotebuzzer']['rebootgpio'],
-        ],
-        'remotebuzzer_move2usbgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['move2usbgpio'],
-            'name' => 'remotebuzzer[move2usbgpio]',
-            'value' => $config['remotebuzzer']['move2usbgpio'],
-        ],
-        'remotebuzzer_rotaryclkgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['rotaryclkgpio'],
-            'name' => 'remotebuzzer[rotaryclkgpio]',
-            'value' => $config['remotebuzzer']['rotaryclkgpio'],
-        ],
-        'remotebuzzer_rotarydtgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['rotarydtgpio'],
-            'name' => 'remotebuzzer[rotarydtgpio]',
-            'value' => $config['remotebuzzer']['rotarydtgpio'],
-        ],
-        'remotebuzzer_rotarybtngpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['rotarybtngpio'],
-            'name' => 'remotebuzzer[rotarybtngpio]',
-            'value' => $config['remotebuzzer']['rotarybtngpio'],
-        ],
-        'remotebuzzer_photolightgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['photolightgpio'],
-            'name' => 'remotebuzzer[photolightgpio]',
-            'value' => $config['remotebuzzer']['photolightgpio'],
-        ],
-        'remotebuzzer_pictureledgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['pictureledgpio'],
-            'name' => 'remotebuzzer[pictureledgpio]',
-            'value' => $config['remotebuzzer']['pictureledgpio'],
-        ],
-        'remotebuzzer_collageledgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['collageledgpio'],
-            'name' => 'remotebuzzer[collageledgpio]',
-            'value' => $config['remotebuzzer']['collageledgpio'],
-        ],
-        'remotebuzzer_customledgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['customledgpio'],
-            'name' => 'remotebuzzer[customledgpio]',
-            'value' => $config['remotebuzzer']['customledgpio'],
-        ],
-        'remotebuzzer_videoledgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['videoledgpio'],
-            'name' => 'remotebuzzer[videoledgpio]',
-            'value' => $config['remotebuzzer']['videoledgpio'],
-        ],
-        'remotebuzzer_shutdownledgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['shutdownledgpio'],
-            'name' => 'remotebuzzer[shutdownledgpio]',
-            'value' => $config['remotebuzzer']['shutdownledgpio'],
-        ],
-        'remotebuzzer_rebootledgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['rebootledgpio'],
-            'name' => 'remotebuzzer[rebootledgpio]',
-            'value' => $config['remotebuzzer']['rebootledgpio'],
-        ],
-        'remotebuzzer_move2usbledgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['move2usbledgpio'],
-            'name' => 'remotebuzzer[move2usbledgpio]',
-            'value' => $config['remotebuzzer']['move2usbledgpio'],
-        ],
-        'remotebuzzer_printledgpio' => [
-            'view' => 'experimental',
-            'type' => 'number',
-            'placeholder' => $defaultConfig['remotebuzzer']['printledgpio'],
-            'name' => 'remotebuzzer[printledgpio]',
-            'value' => $config['remotebuzzer']['printledgpio'],
         ],
     ],
     'synctodrive' => [
@@ -2437,33 +2685,41 @@ return [
             'name' => 'ftp[enabled]',
             'value' => $config['ftp']['enabled'],
         ],
+        'type' => [
+            'view' => 'advanced',
+            'type' => 'select',
+            'name' => 'ftp[type]',
+            'placeholder' => $defaultConfig['ftp']['type'],
+            'options' => RemoteStorageTypeEnum::cases(),
+            'value' => $config['ftp']['type'],
+        ],
         'baseURL' => [
             'view' => 'advanced',
             'type' => 'input',
             'placeholder' => 'ftp.photobooth.com',
             'name' => 'ftp[baseURL]',
-            'value' => htmlentities($config['ftp']['baseURL'] ?? ''),
+            'value' => $config['ftp']['baseURL'],
         ],
         'port' => [
             'view' => 'advanced',
             'type' => 'input',
             'placeholder' => $defaultConfig['ftp']['port'],
             'name' => 'ftp[port]',
-            'value' => htmlentities($config['ftp']['port'] ?? ''),
+            'value' => $config['ftp']['port'],
         ],
         'username' => [
             'view' => 'advanced',
             'type' => 'input',
             'placeholder' => '',
             'name' => 'ftp[username]',
-            'value' => htmlentities($config['ftp']['username'] ?? ''),
+            'value' => $config['ftp']['username'],
         ],
         'password' => [
             'view' => 'advanced',
             'type' => 'input',
             'placeholder' => '',
             'name' => 'ftp[password]',
-            'value' => htmlentities($config['ftp']['password'] ?? ''),
+            'value' => $config['ftp']['password'],
         ],
         'test_connection' => [
             'view' => 'basic',
@@ -2477,27 +2733,21 @@ return [
             'type' => 'input',
             'placeholder' => 'mysite',
             'name' => 'ftp[baseFolder]',
-            'value' => htmlentities($config['ftp']['baseFolder'] ?? ''),
+            'value' => $config['ftp']['baseFolder'],
         ],
         'folder' => [
             'view' => 'advanced',
             'type' => 'input',
             'placeholder' => 'photobooth',
             'name' => 'ftp[folder]',
-            'value' => htmlentities($config['ftp']['folder'] ?? ''),
+            'value' => $config['ftp']['folder'],
         ],
         'title' => [
             'view' => 'advanced',
             'type' => 'input',
             'placeholder' => '',
             'name' => 'ftp[title]',
-            'value' => htmlentities($config['ftp']['title'] ?? ''),
-        ],
-        'appendDate' => [
-            'view' => 'basic',
-            'type' => 'checkbox',
-            'name' => 'ftp[appendDate]',
-            'value' => $config['ftp']['appendDate'],
+            'value' => $config['ftp']['title'],
         ],
         'useForQr' => [
             'view' => 'basic',
@@ -2510,14 +2760,14 @@ return [
             'type' => 'input',
             'placeholder' => 'https://photobooth.com',
             'name' => 'ftp[website]',
-            'value' => htmlentities($config['ftp']['website'] ?? ''),
+            'value' => $config['ftp']['website'],
         ],
         'urlTemplate' => [
             'view' => 'advanced',
             'type' => 'input',
-            'placeholder' => '%website/%folder/%title/',
+            'placeholder' => '%website%/%folder%/%title%',
             'name' => 'ftp[urlTemplate]',
-            'value' => htmlentities($config['ftp']['urlTemplate'] ?? ''),
+            'value' => $config['ftp']['urlTemplate'],
         ],
         'create_webpage' => [
             'view' => 'basic',
@@ -2528,15 +2778,9 @@ return [
         'template_location' => [
             'view' => 'advanced',
             'type' => 'input',
-            'placeholder' => '/resources/template/index.php',
+            'placeholder' => 'resources/template/index.php',
             'name' => 'ftp[template_location]',
-            'value' => htmlentities($config['ftp']['template_location'] ?? ''),
-        ],
-        'upload_thumb' => [
-            'view' => 'basic',
-            'type' => 'checkbox',
-            'name' => 'ftp[upload_thumb]',
-            'value' => $config['ftp']['upload_thumb'],
+            'value' => $config['ftp']['template_location'],
         ],
         'delete' => [
             'view' => 'basic',
@@ -2565,7 +2809,7 @@ return [
             'type' => 'input',
             'placeholder' => null,
             'name' => 'login[password]',
-            'value' => htmlentities($config['login']['password'] ?? ''),
+            'value' => '',
         ],
         'login_keypad' => [
             'view' => 'basic',
@@ -2575,10 +2819,14 @@ return [
         ],
         'login_pin' => [
             'view' => 'basic',
-            'type' => 'number',
+            'type'       => 'input',
             'placeholder' => '5555',
             'name' => 'login[pin]',
-            'value' => $config['login']['pin'],
+            'value'      => '',
+            'attributes' => [
+                'inputmode' => 'numeric',
+                'pattern'   => '[0-9]*',
+            ],
         ],
         'login_rental_keypad' => [
             'view' => 'basic',
@@ -2588,10 +2836,14 @@ return [
         ],
         'login_rental_pin' => [
             'view' => 'basic',
-            'type' => 'number',
+            'type'       => 'input',
             'placeholder' => '0815',
             'name' => 'login[rental_pin]',
-            'value' => $config['login']['rental_pin'],
+            'value'      => '',
+            'attributes' => [
+                'inputmode' => 'numeric',
+                'pattern'   => '[0-9]*',
+            ],
         ],
         'protect_admin' => [
             'view' => 'advanced',
@@ -2630,6 +2882,13 @@ return [
             'name' => 'protect[index_redirect]',
             'value' => $config['protect']['index_redirect'],
         ],
+        'protect_ip_whitelist' => [
+            'view' => 'expert',
+            'type' => 'list',
+            'name' => 'protect[ip_whitelist]',
+            'placeholder' => 'Enter IP-Address',
+            'value' => $config['protect']['ip_whitelist'] ?? [],
+        ],
         'protect_manual' => [
             'view' => 'advanced',
             'type' => 'checkbox',
@@ -2649,6 +2908,7 @@ return [
             'view' => 'basic',
             'type' => 'select',
             'name' => 'ui[style]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['ui']['style'],
             'options' => [
                 'classic' => 'classic',
@@ -2662,6 +2922,7 @@ return [
             'view' => 'basic',
             'type' => 'select',
             'name' => 'ui[button]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['ui']['button'],
             'options' => [
                 'classic' => 'classic',
@@ -2676,6 +2937,7 @@ return [
             'type' => 'range',
             'placeholder' => $defaultConfig['ui']['scale'],
             'name' => 'ui[scale]',
+            'data-theme-field' => 'true',
             'value' => $config['ui']['scale'],
             'range_min' => 100,
             'range_max' => 200,
@@ -2687,6 +2949,7 @@ return [
             'type' => 'range',
             'placeholder' => $defaultConfig['ui']['scale_resultImage'],
             'name' => 'ui[scale_resultImage]',
+            'data-theme-field' => 'true',
             'value' => $config['ui']['scale_resultImage'],
             'range_min' => 10,
             'range_max' => 100,
@@ -2697,6 +2960,7 @@ return [
             'view' => 'basic',
             'type' => 'checkbox',
             'name' => 'ui[shutter_animation]',
+            'data-theme-field' => 'true',
             'value' => $config['ui']['shutter_animation'],
         ],
         'ui_shutter_cheese_img' => [
@@ -2704,6 +2968,7 @@ return [
             'type' => 'image',
             'name' => 'ui[shutter_cheese_img]',
             'placeholder' => $defaultConfig['ui']['shutter_cheese_img'],
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['ui']['shutter_cheese_img'] ?? ''),
             'paths' => [
                 PathUtility::getAbsolutePath('resources/img/cheese'),
@@ -2728,17 +2993,11 @@ return [
             'name' => 'ui[result_buttons]',
             'value' => $config['ui']['result_buttons'],
         ],
-        'colors_countdown' => [
-            'view' => 'advanced',
-            'type' => 'color',
-            'name' => 'colors[countdown]',
-            'placeholder' => $defaultConfig['colors']['countdown'],
-            'value' => $config['colors']['countdown'],
-        ],
         'colors_background_countdown' => [
             'view' => 'advanced',
             'type' => 'color',
             'name' => 'colors[background_countdown]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['colors']['background_countdown'],
             'value' => $config['colors']['background_countdown'],
         ],
@@ -2746,6 +3005,7 @@ return [
             'view' => 'advanced',
             'type' => 'color',
             'name' => 'colors[cheese]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['colors']['cheese'],
             'value' => $config['colors']['cheese'],
         ],
@@ -2753,6 +3013,7 @@ return [
             'view' => 'advanced',
             'type' => 'select',
             'name' => 'background[type]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['background']['type'],
             'options' => [
                 'image' => 'image',
@@ -2765,6 +3026,7 @@ return [
             'type' => 'video',
             'name' => 'background[video]',
             'placeholder' => $defaultConfig['background']['video'],
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['background']['video'] ?? ''),
             'paths' => [
                 PathUtility::getAbsolutePath('resources/videos/background'),
@@ -2776,6 +3038,7 @@ return [
             'type' => 'image',
             'name' => 'background[defaults]',
             'placeholder' => $defaultConfig['background']['defaults'],
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['background']['defaults'] ?? ''),
             'paths' => [
                 PathUtility::getAbsolutePath('resources/img/background'),
@@ -2787,6 +3050,7 @@ return [
             'type' => 'image',
             'name' => 'background[chroma]',
             'placeholder' => $defaultConfig['background']['chroma'],
+            'data-theme-field' => 'true',
             'value' => htmlentities($config['background']['chroma'] ?? ''),
             'paths' => [
                 PathUtility::getAbsolutePath('resources/img/background'),
@@ -2797,12 +3061,14 @@ return [
             'view' => 'expert',
             'type' => 'checkbox',
             'name' => 'ui[decore_lines]',
+            'data-theme-field' => 'true',
             'value' => $config['ui']['decore_lines'],
         ],
         'colors_primary' => [
             'view' => 'expert',
             'type' => 'color',
             'name' => 'colors[primary]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['colors']['primary'],
             'value' => $config['colors']['primary'],
         ],
@@ -2810,6 +3076,7 @@ return [
             'view' => 'expert',
             'type' => 'color',
             'name' => 'colors[primary_light]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['colors']['primary_light'],
             'value' => $config['colors']['primary_light'],
         ],
@@ -2817,6 +3084,7 @@ return [
             'view' => 'expert',
             'type' => 'color',
             'name' => 'colors[secondary]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['colors']['secondary'],
             'value' => $config['colors']['secondary'],
         ],
@@ -2824,6 +3092,7 @@ return [
             'view' => 'expert',
             'type' => 'color',
             'name' => 'colors[highlight]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['colors']['highlight'],
             'value' => $config['colors']['highlight'],
         ],
@@ -2831,6 +3100,7 @@ return [
             'view' => 'expert',
             'type' => 'color',
             'name' => 'colors[font]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['colors']['font'],
             'value' => $config['colors']['font'],
         ],
@@ -2838,27 +3108,15 @@ return [
             'view' => 'expert',
             'type' => 'color',
             'name' => 'colors[font_secondary]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['colors']['font_secondary'],
             'value' => $config['colors']['font_secondary'],
-        ],
-        'colors_button_font' => [
-            'view' => 'expert',
-            'type' => 'color',
-            'name' => 'colors[button_font]',
-            'placeholder' => $defaultConfig['colors']['button_font'],
-            'value' => $config['colors']['button_font'],
-        ],
-        'colors_start_font' => [
-            'view' => 'expert',
-            'type' => 'color',
-            'name' => 'colors[start_font]',
-            'placeholder' => $defaultConfig['colors']['start_font'],
-            'value' => $config['colors']['start_font'],
         ],
         'colors_panel' => [
             'view' => 'expert',
             'type' => 'color',
             'name' => 'colors[panel]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['colors']['panel'],
             'value' => $config['colors']['panel'],
         ],
@@ -2866,6 +3124,7 @@ return [
             'view' => 'expert',
             'type' => 'color',
             'name' => 'colors[border]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['colors']['border'],
             'value' => $config['colors']['border'],
         ],
@@ -2873,13 +3132,23 @@ return [
             'view' => 'expert',
             'type' => 'color',
             'name' => 'colors[box]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['colors']['box'],
             'value' => $config['colors']['box'],
+        ],
+        'colors_status_bar' => [
+            'view' => 'expert',
+            'type' => 'color',
+            'name' => 'colors[status_bar]',
+            'data-theme-field' => 'true',
+            'placeholder' => $defaultConfig['colors']['status_bar'],
+            'value' => $config['colors']['status_bar'],
         ],
         'colors_gallery_button' => [
             'view' => 'expert',
             'type' => 'color',
             'name' => 'colors[gallery_button]',
+            'data-theme-field' => 'true',
             'placeholder' => $defaultConfig['colors']['gallery_button'],
             'value' => $config['colors']['gallery_button'],
         ],
@@ -3192,6 +3461,282 @@ return [
             'value' => $config['icons']['slideshow_toggle'],
         ],
     ],
+    'fonts' => [
+        'view'                            => 'basic',
+        'platform'                        => 'all',
+        'fonts_default'                   => [
+            'view'             => 'basic',
+            'type'             => 'font',
+            'name'             => 'fonts[default]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['default'],
+            'value'            => htmlentities($config['fonts']['default'] ?? ''),
+            'paths'            => [
+                PathUtility::getAbsolutePath('resources/fonts'),
+                PathUtility::getAbsolutePath('private/fonts'),
+            ],
+        ],
+        'fonts_default_bold'              => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[default_bold]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['default_bold'],
+        ],
+        'fonts_default_italic'            => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[default_italic]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['default_italic'],
+        ],
+        'fonts_default_color'             => [
+            'view'             => 'basic',
+            'type'             => 'color',
+            'name'             => 'fonts[default_color]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['default_color'],
+            'value'            => $config['fonts']['default_color'] ?? '',
+        ],
+        'fonts_start_screen_title'        => [
+            'view'             => 'basic',
+            'type'             => 'font',
+            'name'             => 'fonts[start_screen_title]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['start_screen_title'],
+            'value'            => htmlentities($config['fonts']['start_screen_title'] ?? ''),
+            'paths'            => [
+                PathUtility::getAbsolutePath('resources/fonts'),
+                PathUtility::getAbsolutePath('private/fonts'),
+            ],
+        ],
+        'fonts_start_screen_title_bold'   => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[start_screen_title_bold]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['start_screen_title_bold'],
+        ],
+        'fonts_start_screen_title_italic' => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[start_screen_title_italic]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['start_screen_title_italic'],
+        ],
+        'fonts_start_screen_title_color'  => [
+            'view'             => 'basic',
+            'type'             => 'color',
+            'name'             => 'fonts[start_screen_title_color]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['start_screen_title_color'],
+            'value'            => $config['fonts']['start_screen_title_color'] ?? '',
+        ],
+        'fonts_event_text'                => [
+            'view'             => 'basic',
+            'type'             => 'font',
+            'name'             => 'fonts[event_text]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['event_text'],
+            'value'            => htmlentities($config['fonts']['event_text'] ?? ''),
+            'paths'            => [
+                PathUtility::getAbsolutePath('resources/fonts'),
+                PathUtility::getAbsolutePath('private/fonts'),
+            ],
+        ],
+        'fonts_event_text_bold'           => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[event_text_bold]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['event_text_bold'],
+        ],
+        'fonts_event_text_italic'         => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[event_text_italic]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['event_text_italic'],
+        ],
+        'fonts_event_text_color'          => [
+            'view'             => 'basic',
+            'type'             => 'color',
+            'name'             => 'fonts[event_text_color]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['event_text_color'],
+            'value'            => $config['fonts']['event_text_color'] ?? '',
+        ],
+        'fonts_countdown_text'            => [
+            'view'             => 'basic',
+            'type'             => 'font',
+            'name'             => 'fonts[countdown_text]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['countdown_text'],
+            'value'            => htmlentities($config['fonts']['countdown_text'] ?? ''),
+            'paths'            => [
+                PathUtility::getAbsolutePath('resources/fonts'),
+                PathUtility::getAbsolutePath('private/fonts'),
+            ],
+        ],
+        'fonts_countdown_text_bold'       => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[countdown_text_bold]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['countdown_text_bold'],
+        ],
+        'fonts_countdown_text_italic'     => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[countdown_text_italic]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['countdown_text_italic'],
+        ],
+        'fonts_countdown_text_color'      => [
+            'view'             => 'basic',
+            'type'             => 'color',
+            'name'             => 'fonts[countdown_text_color]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['countdown_text_color'],
+            'value'            => $config['fonts']['countdown_text_color'] ?? '',
+        ],
+        'fonts_gallery_title'             => [
+            'view'             => 'basic',
+            'type'             => 'font',
+            'name'             => 'fonts[gallery_title]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['gallery_title'],
+            'value'            => htmlentities($config['fonts']['gallery_title'] ?? ''),
+            'paths'            => [
+                PathUtility::getAbsolutePath('resources/fonts'),
+                PathUtility::getAbsolutePath('private/fonts'),
+            ],
+        ],
+        'fonts_gallery_title_bold'        => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[gallery_title_bold]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['gallery_title_bold'],
+        ],
+        'fonts_gallery_title_italic'      => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[gallery_title_italic]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['gallery_title_italic'],
+        ],
+        'fonts_gallery_title_color'       => [
+            'view'             => 'basic',
+            'type'             => 'color',
+            'name'             => 'fonts[gallery_title_color]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['gallery_title_color'],
+            'value'            => $config['fonts']['gallery_title_color'] ?? '',
+        ],
+        'fonts_screensaver_text'          => [
+            'view'             => 'basic',
+            'type'             => 'font',
+            'name'             => 'fonts[screensaver_text]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['screensaver_text'],
+            'value'            => htmlentities($config['fonts']['screensaver_text'] ?? ''),
+            'paths'            => [
+                PathUtility::getAbsolutePath('resources/fonts'),
+                PathUtility::getAbsolutePath('private/fonts'),
+            ],
+        ],
+        'fonts_screensaver_text_bold'     => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[screensaver_text_bold]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['screensaver_text_bold'],
+        ],
+        'fonts_screensaver_text_italic'   => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[screensaver_text_italic]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['screensaver_text_italic'],
+        ],
+        'fonts_screensaver_text_color'    => [
+            'view'             => 'basic',
+            'type'             => 'color',
+            'name'             => 'fonts[screensaver_text_color]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['screensaver_text_color'],
+            'value'            => $config['fonts']['screensaver_text_color'] ?? '',
+        ],
+        'fonts_button_font'               => [
+            'view'             => 'basic',
+            'type'             => 'font',
+            'name'             => 'fonts[button_font]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['button_font'],
+            'value'            => htmlentities($config['fonts']['button_font'] ?? ''),
+            'paths'            => [
+                PathUtility::getAbsolutePath('resources/fonts'),
+                PathUtility::getAbsolutePath('private/fonts'),
+            ],
+        ],
+        'fonts_button_font_bold'          => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[button_font_bold]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['button_font_bold'],
+        ],
+        'fonts_button_font_italic'        => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[button_font_italic]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['button_font_italic'],
+        ],
+        'fonts_button_font_color'         => [
+            'view'             => 'basic',
+            'type'             => 'color',
+            'name'             => 'fonts[button_font_color]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['button_font_color'],
+            'value'            => $config['fonts']['button_font_color'] ?? '',
+        ],
+        'fonts_button_buzzer_message_font' => [
+            'view'             => 'basic',
+            'type'             => 'font',
+            'name'             => 'fonts[button_buzzer_message_font]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['button_buzzer_message_font'],
+            'value'            => htmlentities($config['fonts']['button_buzzer_message_font'] ?? ''),
+            'paths'            => [
+                PathUtility::getAbsolutePath('resources/fonts'),
+                PathUtility::getAbsolutePath('private/fonts'),
+            ],
+        ],
+        'fonts_button_buzzer_message_font_bold' => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[button_buzzer_message_font_bold]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['button_buzzer_message_font_bold'],
+        ],
+        'fonts_button_buzzer_message_font_italic' => [
+            'view'             => 'basic',
+            'type'             => 'checkbox',
+            'name'             => 'fonts[button_buzzer_message_font_italic]',
+            'data-theme-field' => 'true',
+            'value'            => $config['fonts']['button_buzzer_message_font_italic'],
+        ],
+        'fonts_button_buzzer_message_font_color' => [
+            'view'             => 'basic',
+            'type'             => 'color',
+            'name'             => 'fonts[button_buzzer_message_font_color]',
+            'data-theme-field' => 'true',
+            'placeholder'      => $defaultConfig['fonts']['button_buzzer_message_font_color'],
+            'value'            => $config['fonts']['button_buzzer_message_font_color'] ?? '',
+        ],
+    ],
     'jpeg_quality' => [
         'view' => 'expert',
         'jpeg_quality_image' => [
@@ -3236,6 +3781,13 @@ return [
             'placeholder' => $defaultConfig['commands']['take_picture'],
             'name' => 'commands[take_picture]',
             'value' => htmlentities($config['commands']['take_picture'] ?? ''),
+        ],
+        'take_collage_cmd' => [
+            'view' => 'expert',
+            'type' => 'input',
+            'placeholder' => $defaultConfig['commands']['take_collage'],
+            'name' => 'commands[take_collage]',
+            'value' => htmlentities($config['commands']['take_collage'] ?? ''),
         ],
         'pre_photo_cmd' => [
             'view' => 'expert',
@@ -3326,23 +3878,33 @@ return [
             'type' => 'checkbox',
             'name' => 'reset[remove_media]',
             'value' => false,
+            'note' => sprintf(
+                $languageService->translate('reset:media_counts'),
+                $mediaCounts['original'],
+                $mediaCounts['deleted'],
+                $mediaCounts['framed'],
+                $mediaCounts['printed'],
+                $mediaCounts['videos']
+            ),
         ],
         'reset_remove_mailtxt' => [
             'view' => 'advanced',
             'type' => 'checkbox',
             'name' => 'reset[remove_mail_db]',
             'value' => false,
-        ],
-        'reset_remove_config' => [
-            'view' => 'expert',
-            'type' => 'checkbox',
-            'name' => 'reset[remove_config]',
-            'value' => false,
+            'note' => $languageService->translate('reset:stored_mail_addresses') . ': ' . $mailAddressesCount,
         ],
         'reset_remove_print_db' => [
             'view' => 'expert',
             'type' => 'checkbox',
             'name' => 'reset[remove_print_db]',
+            'value' => false,
+            'note' => $languageService->translate('reset:print_db_entries') . ': ' . $printDbCount,
+        ],
+        'reset_remove_config' => [
+            'view' => 'expert',
+            'type' => 'checkbox',
+            'name' => 'reset[remove_config]',
             'value' => false,
         ],
         'reset_button' => [

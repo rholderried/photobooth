@@ -5,22 +5,26 @@
 require_once '../lib/boot.php';
 
 use Photobooth\Image;
-use Photobooth\Helper;
 use Photobooth\Collage;
+use Photobooth\Rembg;
 use Photobooth\Enum\FolderEnum;
 use Photobooth\Enum\ImageFilterEnum;
 use Photobooth\Processor\ImageProcessor;
 use Photobooth\Service\DatabaseManagerService;
 use Photobooth\Service\LoggerService;
+use Photobooth\Service\RemoteStorageService;
 use Photobooth\Utility\ImageUtility;
 use Photobooth\Utility\PathUtility;
 
 header('Content-Type: application/json');
 
+checkCsrfOrFail($_POST);
+
 $logger = LoggerService::getInstance()->getLogger('main');
 $logger->debug(basename($_SERVER['PHP_SELF']));
 
 $database = DatabaseManagerService::getInstance();
+$remoteStorage = RemoteStorageService::getInstance();
 
 $processor = null;
 
@@ -29,11 +33,23 @@ try {
         throw new \Exception('No file provided');
     }
 
-    $vars['fileName'] = $_POST['file'];
+    $vars['fileName'] = basename((string)$_POST['file']);
+    if ($vars['fileName'] === '' || !preg_match('/^[A-Za-z0-9._-]+$/', $vars['fileName'])) {
+        throw new \Exception('Invalid file name provided');
+    }
 
     if (!isset($_POST['style']) || !in_array($_POST['style'], ['photo', 'collage', 'custom', 'chroma'])) {
         throw new \Exception('Invalid or missing style parameter');
     }
+
+    if (isset($_POST['collageLayout'])) {
+        $config['collage']['layout'] = $_POST['collageLayout'];
+
+    }
+
+    $limitData = Collage::calculateLimit($config['collage'], $logger);
+    $config['collage']['limit'] = $limitData['limit'];
+    $config['collage']['placeholder'] = $limitData['placeholderEnabled'];
 
     $vars['style'] = $_POST['style'];
 
@@ -81,16 +97,16 @@ try {
     }
 
     if ($vars['isCollage']) {
-        list($vars['collageSrcImagePaths'], $vars['srcImages']) = Collage::getCollageFiles($config['collage'], $vars['tmpFile'], $vars['fileName'], $vars['srcImages']);
+        [$vars['collageSrcImagePaths'], $vars['srcImages']] = Collage::getCollageFiles($config['collage'], $vars['tmpFile'], $vars['fileName'], $vars['srcImages']);
 
         if ($processor !== null && $processor instanceof ImageProcessor && method_exists($processor, 'preCollageProcessing')) {
-            list($imageHandler, $vars, $config) = $processor->preCollageProcessing($imageHandler, $vars, $config);
+            [$imageHandler, $vars, $config] = $processor->preCollageProcessing($imageHandler, $vars, $config);
         }
         if (!Collage::createCollage($config, $vars['collageSrcImagePaths'], $vars['tmpFile'], $vars['imageFilter'])) {
             throw new \Exception('Error creating collage image.');
         }
         if ($processor !== null && $processor instanceof ImageProcessor && method_exists($processor, 'postCollageProcessing')) {
-            list($imageHandler, $vars, $config) = $processor->postCollageProcessing($imageHandler, $vars, $config);
+            [$imageHandler, $vars, $config] = $processor->postCollageProcessing($imageHandler, $vars, $config);
         }
     }
 
@@ -111,19 +127,36 @@ try {
         }
 
         if ($processor !== null && $processor instanceof ImageProcessor && method_exists($processor, 'preImageProcessing')) {
-            list($imageHandler, $vars, $config, $imageResource) = $processor->preImageProcessing($imageHandler, $vars, $config, $imageResource);
+            [$imageHandler, $vars, $config, $imageResource] = $processor->preImageProcessing($imageHandler, $vars, $config, $imageResource);
         }
         if (!$vars['isChroma']) {
             if ($vars['isCollage'] && $vars['fileName'] != $vars['singleImageFile']) {
                 $vars['editSingleCollage'] = true;
-                $imageHandler->framePath = $config['collage']['take_frame'] === 'always' ? $config['collage']['frame'] : $config['picture']['frame'];
+                $imageHandler->framePath = PathUtility::getPublicPath($config['collage']['take_frame'] === 'always' ? $config['collage']['frame'] : $config['picture']['frame']);
             } else {
                 $vars['editSingleCollage'] = false;
-                $imageHandler->framePath = $config['picture']['frame'];
+                $imageHandler->framePath = PathUtility::getPublicPath($config['picture']['frame']);
             }
 
             if (!$vars['isCollage'] || $vars['editSingleCollage']) {
-                // apply filter
+                $filterProcessSize = intval($config['filters']['process_size'] ?? 0);
+
+                // only downscale if filter not plain, rembg is enabled
+                $originalResource = null;
+                if ($vars['imageFilter'] !== ImageFilterEnum::PLAIN || $config['rembg']['enabled']) {
+                    $originalWidth    = imagesx($imageResource);
+                    $originalHeight   = imagesy($imageResource);
+                    $originalResource = $imageResource;
+
+                    if ($filterProcessSize > 0 && ($originalWidth > $filterProcessSize || $originalHeight > $filterProcessSize)) {
+                        $downscaledResource = $imageHandler->resizeImage($imageResource, $filterProcessSize);
+                        if ($downscaledResource instanceof \GdImage) {
+                            $imageResource = $downscaledResource;
+                        }
+                    }
+                }
+
+                // apply filter (optionally downscale first for performance)
                 if ($vars['imageFilter'] !== null && $vars['imageFilter'] !== ImageFilterEnum::PLAIN) {
                     try {
                         ImageUtility::applyFilter($vars['imageFilter'], $imageResource);
@@ -131,6 +164,7 @@ try {
                     } catch (\Exception $e) {
                         throw new \Exception('Error applying image filter.');
                     }
+
                 }
 
                 if ($config['picture']['flip'] !== 'off') {
@@ -148,15 +182,18 @@ try {
                     }
                 }
 
-                if ($config['picture']['rotation'] !== '0') {
+                if ((int)$config['picture']['rotation'] !== 0) {
                     $imageResource = $imageHandler->rotateResizeImage(
                         image: $imageResource,
-                        degrees: $config['picture']['rotation']
+                        degrees: (int)$config['picture']['rotation'],
                     );
                     if (!$imageResource instanceof \GdImage) {
                         throw new \Exception('Error resizing resource.');
                     }
                 }
+
+                // Apply rembg
+                [$imageHandler, $imageResource] = Rembg::process($imageHandler, $vars, $config['rembg'], $imageResource);
 
                 if ($config['picture']['polaroid_effect']) {
                     $imageHandler->polaroidRotation = $config['picture']['polaroid_rotation'];
@@ -183,11 +220,23 @@ try {
                         throw new \Exception('Error applying frame to image resource.');
                     }
                 }
+
+                // Maybe we want this later or configurable, will take some time to process upscale again
+                // Upscale back to original size
+                //                if (!empty($originalResource) && $originalResource !== $imageResource) {
+                //                        $restored = $imageHandler->resizeImage($imageResource, $originalWidth, $originalHeight);
+                //                        if ($restored instanceof \GdImage) {
+                //                            if ($imageResource instanceof \GdImage) {
+                //                                unset($imageResource);
+                //                            }
+                //                            $imageResource = $restored;
+                //                        }
+                //                }
             }
         }
 
         if ($processor !== null && $processor instanceof ImageProcessor && method_exists($processor, 'postImageProcessing')) {
-            list($imageHandler, $vars, $config, $imageResource) = $processor->postImageProcessing($imageHandler, $vars, $config, $imageResource);
+            [$imageHandler, $vars, $config, $imageResource] = $processor->postImageProcessing($imageHandler, $vars, $config, $imageResource);
         }
 
         if ($config['keying']['enabled'] || $vars['isChroma']) {
@@ -207,16 +256,24 @@ try {
         }
 
         if ($config['textonpicture']['enabled'] && (!$vars['isCollage'] && !$vars['isChroma'] || $vars['editSingleCollage'])) {
-            $imageHandler->fontSize = $config['textonpicture']['font_size'];
+            // calculate and apply text on picture if image got downscaled before
+            $scale = 1.0;
+            if (isset($originalWidth) && isset($originalHeight)) {
+                $currentWidth = imagesx($imageResource);
+                $scale        = $currentWidth / $originalWidth;
+            }
+
+            // Cast after scaling to avoid implicit float-to-int deprecation warnings in PHP 8.4
+            $imageHandler->fontSize        = (int) round($config['textonpicture']['font_size'] * $scale);
+            $imageHandler->textLineSpacing = (int) round($config['textonpicture']['linespace'] * $scale);
+            $imageHandler->fontLocationX   = (int) round($config['textonpicture']['locationx'] * $scale);
+            $imageHandler->fontLocationY   = (int) round($config['textonpicture']['locationy'] * $scale);
             $imageHandler->fontRotation = $config['textonpicture']['rotation'];
-            $imageHandler->fontLocationX = $config['textonpicture']['locationx'];
-            $imageHandler->fontLocationY = $config['textonpicture']['locationy'];
             $imageHandler->fontColor = $config['textonpicture']['font_color'];
             $imageHandler->fontPath = $config['textonpicture']['font'];
             $imageHandler->textLine1 = $config['textonpicture']['line1'];
             $imageHandler->textLine2 = $config['textonpicture']['line2'];
             $imageHandler->textLine3 = $config['textonpicture']['line3'];
-            $imageHandler->textLineSpacing = $config['textonpicture']['linespace'];
             $imageResource = $imageHandler->applyText($imageResource);
             if (!$imageResource instanceof \GdImage) {
                 throw new \Exception('Error applying text to image resource.');
@@ -279,106 +336,13 @@ try {
             }
         }
 
-        // send to ftp server
+        // Store images on remote storage
         if ($config['ftp']['enabled']) {
-            // init connection to ftp server
-            $ftp = ftp_ssl_connect($config['ftp']['baseURL'], $config['ftp']['port']);
-
-            if ($ftp === false) {
-                $message = 'Failed to connect to FTP Server!';
-                $logger->error($message, $config['ftp']);
-                echo json_encode(['error' => $message]);
-                die();
+            $remoteStorage->write($remoteStorage->getStorageFolder() . '/images/' . $vars['singleImageFile'], (string) file_get_contents($vars['resultFile']));
+            $remoteStorage->write($remoteStorage->getStorageFolder() . '/thumbs/' . $vars['singleImageFile'], (string) file_get_contents($vars['thumbFile']));
+            if ($config['ftp']['create_webpage']) {
+                $remoteStorage->createWebpage();
             }
-            ftp_set_option($ftp, FTP_TIMEOUT_SEC, 10);
-
-            // login to ftp server
-            $login_result = ftp_login($ftp, $config['ftp']['username'], $config['ftp']['password']);
-
-            if (!$login_result) {
-                $message = 'Can\'t connect to FTP Server!';
-                $logger->error($message, $config['ftp']);
-                echo json_encode(['error' => $message]);
-                die();
-            }
-
-            // turn passive mode on to enable creation of folder and upload of files
-            ftp_pasv($ftp, true);
-
-            $destination = empty($config['ftp']['baseFolder']) ? '' : DIRECTORY_SEPARATOR . $config['ftp']['baseFolder'] . DIRECTORY_SEPARATOR;
-
-            $destination .= $config['ftp']['folder'] . DIRECTORY_SEPARATOR . Helper::slugify($config['ftp']['title']);
-            if ($config['ftp']['appendDate']) {
-                $destination .= DIRECTORY_SEPARATOR . date('Y/m/d');
-            }
-
-            // navigate trough folder on the server to the destination
-            @Helper::cdFTPTree($ftp, $destination);
-
-            // upload processed picture into destination folder
-            $put_result = @ftp_put($ftp, $vars['singleImageFile'], $vars['resultFile'], FTP_BINARY);
-
-            if (!$put_result) {
-                $message = 'Unable to save file on FTP Server!';
-                $logger->error($message, $config['ftp']);
-                echo json_encode(['error' => $message]);
-                die();
-            }
-
-            // upload the thumbnail if enabled
-            if ($config['ftp']['upload_thumb']) {
-                $thumb_result = ftp_put($ftp, 'tmb_' . $vars['singleImageFile'], $vars['thumbFile'], FTP_BINARY);
-                if (!$thumb_result) {
-                    $logger->error('Unable to load the thumbnail', $config['ftp']);
-                }
-            }
-
-            // check if the webpage is enabled and is not already loaded on the ftp server
-            if ($config['ftp']['create_webpage'] && (!isset($_SESSION['ftpWebpageLoaded']) || $_SESSION['ftpWebpageLoaded'] != $config['ftp']['title'])) {
-                // if the date folder structure is appended, return to the main folder
-                if ($config['ftp']['appendDate']) {
-                    @Helper::cdFTPTree($ftp, '../../../');
-                }
-
-                // another security check on the file in the server (e.g. 2-day event with the same ftp folder location)
-                $webpage_exist = ftp_size($ftp, 'index.php');
-                if ($webpage_exist == -1) {
-                    // get the index.php template file from the configured location
-                    $webpage_template = file_get_contents($config['ftp']['template_location']);
-
-                    if ($webpage_template === false) {
-                        throw new \Exception('File could not be read: ' . $config['ftp']['template_location']);
-                    }
-                    // set the {title} variable
-                    $final_webpage = str_replace('{title}', $config['ftp']['title'], $webpage_template);
-
-                    // put the file into a stream
-                    $stream = fopen('php://memory', 'r+');
-                    if ($stream === false) {
-                        throw new \Exception('Could not put the file into a stream!');
-                    }
-                    fwrite($stream, $final_webpage);
-                    rewind($stream);
-
-                    // load the index.php result file in the ftp server
-                    $upload_webpage = ftp_fput($ftp, 'index.php', $stream, FTP_BINARY);
-
-                    fclose($stream);
-
-                    if (!$upload_webpage) {
-                        $message = 'Unable to save file on FTP Server!';
-                        $logger->error($message, $config['ftp']);
-                        echo json_encode(['error' => $message]);
-                        die();
-                    }
-
-                    // update the session variable to avoid unnecessary checks
-                    $_SESSION['ftpWebpageLoaded'] = $config['ftp']['title'];
-                }
-            }
-
-            // close the connection
-            @ftp_close($ftp);
         }
 
         // Change permissions

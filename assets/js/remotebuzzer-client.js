@@ -18,11 +18,18 @@ function initRemoteBuzzerFromDOM() {
      */
 
     remoteBuzzerClient = (function () {
+        photoboothTools.console.log('remoteBuzzerClient init');
+
         let ioClient;
+        let serverReachable = false;
         const api = {};
 
         api.enabled = function () {
             return config.remotebuzzer.usebuttons || config.remotebuzzer.userotary;
+        };
+
+        api.connected = function () {
+            return serverReachable && !!ioClient;
         };
 
         api.init = function () {
@@ -31,17 +38,16 @@ function initRemoteBuzzerFromDOM() {
             }
 
             if (config.remotebuzzer.serverip) {
-                ioClient = io(
-                    window.location.protocol + '//' + config.remotebuzzer.serverip + ':' + config.remotebuzzer.port
-                );
-                photoboothTools.console.logDev(
-                    'Remote buzzer connecting to ' +
-                        window.location.protocol +
-                        '//' +
-                        config.remotebuzzer.serverip +
-                        ':' +
-                        config.remotebuzzer.port
-                );
+                const baseUrl =
+                    window.location.protocol + '//' + config.remotebuzzer.serverip + ':' + config.remotebuzzer.port;
+                photoboothTools.console.logDev('Remote buzzer connecting to ' + baseUrl);
+
+                ioClient = io(baseUrl, {
+                    reconnection: true,
+                    reconnectionAttempts: Infinity,
+                    reconnectionDelay: 5 * 1000,
+                    timeout: 3000
+                });
 
                 ioClient.on('photobooth-socket', function (data) {
                     switch (data) {
@@ -96,14 +102,23 @@ function initRemoteBuzzerFromDOM() {
                 });
 
                 ioClient.on('connect_error', function () {
+                    serverReachable = false;
                     photoboothTools.console.log(
-                        'ERROR: Remote buzzer client unable to connect to Remote buzzer Server - please ensure Remote buzzer server is running on ' +
+                        'ERROR: Remote buzzer client unable to connect to Remote buzzer Server - retrying at ' +
+                            baseUrl +
+                            '. Please ensure Remote buzzer server is running on ' +
                             config.remotebuzzer.serverip +
                             '. Set Photobooth loglevel to 1 (or above) to create log file for debugging.'
                     );
                 });
 
+                ioClient.on('disconnect', function () {
+                    serverReachable = false;
+                    photoboothTools.console.log('Remote buzzer client disconnected from ' + baseUrl + '.');
+                });
+
                 ioClient.on('connect', function () {
+                    serverReachable = true;
                     photoboothTools.console.logDev(
                         'Remote buzzer client successfully connected to Remote buzzer Server.'
                     );
@@ -175,6 +190,11 @@ function initRemoteBuzzerFromDOM() {
         };
 
         api.emitToServer = function (cmd, photoboothAction) {
+            if (!this.connected()) {
+                photoboothTools.console.logDev('Skip emitting remote buzzer command; server not connected.');
+                return;
+            }
+
             switch (cmd) {
                 case 'start-picture':
                     ioClient.emit('photobooth-socket', 'start-picture');
