@@ -21,7 +21,7 @@
 }
 
 html {
-  touch-action: none;
+  touch-action: pan-x pan-y;
   font-size: var(--ui-scale);
 }
 

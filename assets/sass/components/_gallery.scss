@@ -46,6 +46,7 @@
     padding: 2rem;
     flex-grow: 1;
     overflow-y: scroll;
+    touch-action: pan-y;
   }
 
   &-title {
