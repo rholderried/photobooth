@@ -17,7 +17,7 @@ import time
 import zmq
 import socket
 import re
-from typing import Any, List
+from typing import Any, List, Optional
 from argparse import Namespace
 from subprocess import Popen, PIPE
 from datetime import datetime, timedelta
@@ -76,6 +76,17 @@ def create_virtual_camera(video_nr=9):
     )
 
     return f"/dev/video{video_nr}"
+
+
+def mime_type(camera_file: Any) -> Optional[str]:
+    """
+    Report a CameraFile's mime type, or None if this libgphoto2 build does not
+    expose one. Diagnostic only -- never worth failing a capture over.
+    """
+    try:
+        return camera_file.get_mime_type()
+    except Exception:  # noqa: BLE001 - older/other libgphoto2 bindings
+        return None
 
 
 def get_v4l2_devices() -> List[str]:
@@ -510,8 +521,10 @@ class CameraControl:
                         img_bytes = memoryview(capture.get_data_and_size()).tobytes()
                         # capture_preview() already yields complete JPEGs, so
                         # MJPEG needs no re-encoding -- publish them as-is.
+                        # The mime type is passed so a non-JPEG camera fails
+                        # with a clear message instead of an undecodable stream.
                         if self.mjpeg is not None:
-                            self.mjpeg.publish(img_bytes)
+                            self.mjpeg.publish(img_bytes, mime_type(capture))
                         if self.ffmpeg is not None:
                             self.ffmpeg.stdin.write(img_bytes)
                     else:

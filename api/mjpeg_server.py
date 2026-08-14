@@ -46,6 +46,9 @@ log = logging.getLogger(__name__)
 
 BOUNDARY = "photoboothframe"
 
+# JPEG Start Of Image marker. Frames must begin with this to be servable.
+JPEG_SOI = b"\xff\xd8"
+
 
 class FrameBroker:
     """
@@ -61,6 +64,17 @@ class FrameBroker:
         self._latest: Optional[bytes] = None
         self._frame_count = 0
         self._started_at = time.time()
+        self._format_error: Optional[str] = None
+
+    @property
+    def format_error(self) -> Optional[str]:
+        """Set when the camera's preview turned out not to be JPEG."""
+        with self._lock:
+            return self._format_error
+
+    def set_format_error(self, message: str) -> None:
+        with self._lock:
+            self._format_error = message
 
     def subscribe(self) -> Queue:
         q: Queue = Queue(maxsize=1)
@@ -107,6 +121,7 @@ class FrameBroker:
                 "uptime_seconds": round(uptime, 1),
                 "average_fps": round(self._frame_count / uptime, 1) if uptime > 0 else 0,
                 "has_frame": self._latest is not None,
+                "format_error": self._format_error,
             }
 
 
@@ -120,12 +135,19 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0].rstrip("/")
+        if path == "/healthz":
+            # Always answerable -- it is how you diagnose the failure below.
+            self._serve_health()
+            return
+        # Refuse loudly rather than streaming bytes no browser can decode.
+        error = self.broker.format_error
+        if error is not None:
+            self.send_error(503, "Unsupported camera preview format", error)
+            return
         if path in ("/stream.mjpg", "/stream", ""):
             self._serve_stream()
         elif path in ("/snapshot.jpg", "/snapshot"):
             self._serve_snapshot()
-        elif path == "/healthz":
-            self._serve_health()
         else:
             self.send_error(404, "Not found")
 
@@ -211,6 +233,7 @@ class MjpegServer:
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._last_publish = 0.0
+        self._format_checked = False
 
     def start(self) -> None:
         handler = type("_BoundHandler", (_Handler,), {"broker": self.broker})
@@ -222,13 +245,53 @@ class MjpegServer:
         self._thread.start()
         log.info("MJPEG preview server listening on %s:%s", self.host, self.port)
 
-    def publish(self, frame: bytes) -> None:
+    def publish(self, frame: bytes, mime: Optional[str] = None) -> None:
+        """
+        Publish one preview frame. `mime` is libgphoto2's reported type, used
+        only to make a format mismatch legible in the logs.
+        """
+        if not self._format_checked:
+            self._format_checked = True
+            self._validate_format(frame, mime)
+        if self.broker.format_error is not None:
+            return
+
         if self.min_interval:
             now = time.monotonic()
             if now - self._last_publish < self.min_interval:
                 return
             self._last_publish = now
         self.broker.publish(frame)
+
+    def _validate_format(self, frame: bytes, mime: Optional[str]) -> None:
+        """
+        MJPEG is only meaningful if the camera hands us actual JPEGs.
+
+        Canon EOS bodies do (verified on the EOS RP), and PTP liveview is a
+        motion-JPEG feed on essentially every camera -- but that is an
+        assumption, not a guarantee. Without this check a camera returning
+        anything else would produce a stream no browser can decode, which
+        looks like a browser bug rather than an incompatible camera.
+
+        The magic bytes are authoritative; the mime string is diagnostic.
+        """
+        if frame[:2] == JPEG_SOI:
+            log.info(
+                "Preview format OK: JPEG (mime=%s, %d bytes/frame)",
+                mime or "unreported",
+                len(frame),
+            )
+            return
+
+        detail = (
+            "Camera preview is not JPEG, so it cannot be served as MJPEG. "
+            f"libgphoto2 reports mime={mime or 'unreported'}; "
+            f"frame starts with {frame[:4].hex()} (expected ffd8...), "
+            f"{len(frame)} bytes. Preview is disabled; capture is unaffected. "
+            "See docs-internal/reference/camera-portability.md"
+        )
+        log.error(detail)
+        self.broker.set_format_error(detail)
 
     def stop(self) -> None:
         if self._server is not None:
