@@ -95,7 +95,7 @@ as `api/mjpeg_server.py` plus a small patch to `api/cameracontrol.py`.
 |---|---|---|
 | 1 | Endpoint streams frames | ✅ 157 frames over 13 s, every SOI/EOI matched |
 | 2 | Kiosk renders it | ✅ **confirmed** — Chromium rendered live video, `clients: 1` |
-| 3 | Phone on the LAN renders it | ⬜ not yet tested |
+| 3 | Reachable over the LAN | ✅ network path confirmed from `192.168.8.2`; phone *browser* rendering still untested |
 | 4 | **`manualfocusdrive` while streaming** | ✅ **confirmed** — 4 nudges, stream never dropped |
 | 5 | Nudge repeatability | ⚠️ **not symmetric** — see [../reference/gphoto2-eos-rp.md](../reference/gphoto2-eos-rp.md) |
 
@@ -154,6 +154,24 @@ This is what the old architecture could not do at any price.
 | `/stream.mjpg` | `multipart/x-mixed-replace` live stream |
 | `/snapshot.jpg` | single most-recent frame — cheap for low bandwidth or testing |
 | `/healthz` | JSON: client count, frames published, average fps |
+
+### Full pipeline validated 2026-08-14
+
+Beyond the preview checks, the **whole** camera path was switched over on the
+live booth (go2rtc stopped, `cameracontrol.py` owning the session, both
+`preview.url` and `commands.take_picture` repointed) and then rolled back.
+
+| Check | Result |
+|---|---|
+| Real captures via the kiosk UI | ✅ 6/6, full-res 4521×2944 JPEGs |
+| Preview during and after capture | ✅ uninterrupted, steady ~11.8 fps |
+| **Bug #1** — orphaned `gphoto2` | ✅ **0 processes** throughout (was one per capture) |
+| **Bug #2** — PTP wedge over repeats | ✅ 0 timeouts, camera still enumerated after 6 captures |
+| Two concurrent stream clients | ✅ 119 frames each, no degradation, 33.5 Mbit/s combined |
+
+Both long-standing camera-reliability bugs are fixed *by construction* here:
+with no per-capture session teardown, there is nothing left to orphan or
+wedge. Deployment steps: [../operations/deploy-mjpeg-preview.md](../operations/deploy-mjpeg-preview.md).
 
 ### Remaining before this ships
 
