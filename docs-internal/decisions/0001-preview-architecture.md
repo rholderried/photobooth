@@ -95,7 +95,7 @@ as `api/mjpeg_server.py` plus a small patch to `api/cameracontrol.py`.
 |---|---|---|
 | 1 | Endpoint streams frames | ✅ 157 frames over 13 s, every SOI/EOI matched |
 | 2 | Kiosk renders it | ✅ **confirmed** — Chromium rendered live video, `clients: 1` |
-| 3 | Reachable over the LAN | ✅ network path confirmed from `192.168.8.2`; phone *browser* rendering still untested |
+| 3 | Phone on the LAN renders it | ✅ **confirmed** — Roman viewed it on his phone via `192.168.8.2`, reported smooth |
 | 4 | **`manualfocusdrive` while streaming** | ✅ **confirmed** — 4 nudges, stream never dropped |
 | 5 | Nudge repeatability | ⚠️ **not symmetric** — see [../reference/gphoto2-eos-rp.md](../reference/gphoto2-eos-rp.md) |
 
