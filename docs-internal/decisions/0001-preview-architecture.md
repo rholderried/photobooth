@@ -94,10 +94,28 @@ as `api/mjpeg_server.py` plus a small patch to `api/cameracontrol.py`.
 | # | Check | Result |
 |---|---|---|
 | 1 | Endpoint streams frames | ✅ 157 frames over 13 s, every SOI/EOI matched |
-| 2 | Kiosk renders via `preview.mode = 'url'` | ⬜ not yet tested |
+| 2 | Kiosk renders it | ✅ **confirmed** — Chromium rendered live video, `clients: 1` |
 | 3 | Phone on the LAN renders it | ⬜ not yet tested |
 | 4 | **`manualfocusdrive` while streaming** | ✅ **confirmed** — 4 nudges, stream never dropped |
-| 5 | Nudge repeatability | ⬜ not yet measured |
+| 5 | Nudge repeatability | ⚠️ **not symmetric** — see [../reference/gphoto2-eos-rp.md](../reference/gphoto2-eos-rp.md) |
+
+### Check 2 in detail
+
+`preview.url` already points at an MJPEG stream (go2rtc's
+`/api/stream.mjpeg`), so switching is a **one-line config change** — the
+frontend needs no modification at all:
+
+```php
+'url' => 'http://localhost:8081/stream.mjpg',   // was localhost:1984/api/stream.mjpeg?src=photobooth
+```
+
+Verified by driving the kiosk over CDP (port 9222): Chromium rendered the
+stream, `/healthz` showed `clients: 1`, and the frame counter kept climbing.
+Proven *live* rather than a single stuck frame by defocusing the lens between
+two screenshots — the rendered image visibly blurred in response.
+
+Note `preview.js` appends a cache-busting `?t=<timestamp>`; the handler
+strips query strings, so this already works.
 
 ### The finding that made this easy
 
