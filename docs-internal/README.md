@@ -31,6 +31,9 @@ PHP backend → JS frontend):
 Keep [reference/php-for-python-devs.md](reference/php-for-python-devs.md) open
 alongside — it collects the PHP idioms that don't map cleanly from Python.
 
+For how the booth sits on its network (built-in router, wired Pi, addressing),
+see [operations/network-topology.md](operations/network-topology.md).
+
 **Rebuilding this booth from scratch?** Start instead with
 [operations/untracked-system-state.md](operations/untracked-system-state.md) —
 the complete inventory of configuration that lives *outside* this repo

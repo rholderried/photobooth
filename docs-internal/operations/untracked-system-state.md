@@ -183,17 +183,14 @@ on this entirely.
 
 - **`nginx`** — `disabled`, inactive. Conflicted with Apache for port 80 at
   boot. Do not re-enable without moving Apache off port 80 first.
-- **`hostapd`** — ⚠️ **`masked`**, inactive. Config exists at
-  `/etc/hostapd/hostapd.conf` (SSID `retro_pbx`, WPA2, wlan0, channel 6;
-  passphrase is in that file, not reproduced here). `dnsmasq` is also
-  disabled, so there is no DHCP server either.
+- **`hostapd`** — `masked`, inactive, **and correctly so**. A leftover config
+  exists at `/etc/hostapd/hostapd.conf` (SSID `retro_pbx`, WPA2, wlan0), but
+  the Pi does **not** provide the access point: the booth contains its own
+  router which does that, with the Pi wired to it over `eth0`. `dnsmasq` is
+  disabled for the same reason. `wlan0` is DOWN and unused.
 
-  **The booth does not currently provide its own WiFi.** It joins an existing
-  network. This matters for the customer config screen, which assumes the
-  customer connects "to the booth" — see
-  [../decisions/0002-customer-config-access-control.md](../decisions/0002-customer-config-access-control.md).
-  Unmasking requires `sudo systemctl unmask hostapd` plus re-enabling
-  `dnsmasq` and assigning `wlan0` a static address.
+  ✅ **Do not "fix" this.** Unmasking hostapd would create a second, competing
+  AP. Topology: [network-topology.md](network-topology.md).
 
 ## 12. PHP ⚠️
 
