@@ -92,11 +92,77 @@ false precision over a control that cannot hit it — hence the visual
 nudge-based UI in
 [../decisions/0001-preview-architecture.md](../decisions/0001-preview-architecture.md).
 
-## Open question — worth measuring
+## Preview frames (measured 2026-08-14)
 
-Are the nudges **repeatable**? Test: drive `Near 3` ×10, then `Far 3` ×10, and
-check whether focus returns to the same plane. If it does, a homing routine
-becomes *conceivable* (though still fragile). If it doesn't, any
-calibration-based approach is dead and visual-only is the sole option.
+`capture_preview()` via `python-gphoto2` returns **complete JPEG images**, not
+raw frames:
 
-Not yet run — needs a working liveview to observe the result.
+```
+first 4 bytes : ffd8ffdb          ← JPEG SOI
+last  2 bytes : ffd9              ← JPEG EOI
+gphoto mime   : image/jpeg
+dimensions    : 960x640
+size          : ~148 KB/frame (147,578–148,126 across 30 frames)
+rate          : 20.9 fps sustained
+```
+
+This is why MJPEG streaming needs no re-encoding, no ffmpeg and no
+v4l2loopback — see
+[../decisions/0001-preview-architecture.md](../decisions/0001-preview-architecture.md).
+
+**Focus during preview is confirmed working**, both directly and through the
+running daemon with an HTTP client attached. `manualfocusdrive` applied
+cleanly with no interruption to the frame stream:
+
+```
+Near 1  -> ok; preview still alive (147,719 bytes)
+Far 1   -> ok; preview still alive (147,908 bytes)
+```
+
+## Nudge repeatability — measured 2026-08-14 ⚠️
+
+**The nudges are NOT symmetric.** `Near 3` ×3 followed by
+`Far 3` ×3 did not return focus to its starting plane — it recovered only
+**~23%** of the detail lost. Restoring the original focus then took **>30
+additional `Near 1` steps**, which is not the behaviour of a reversible,
+evenly-stepped control.
+
+### Why this matters
+
+This kills any calibration or homing scheme outright:
+
+- You cannot "drive to a known end and count back" — steps have no stable
+  size, and reversing does not retrace.
+- You cannot store a focus position as a step count and restore it later.
+- Confirms the [decision](../decisions/0001-preview-architecture.md) to expose
+  focus as **visual nudges with live feedback only**. There is no coordinate
+  system to persist, so there is nothing to calibrate.
+
+Consistent with RF focus-by-wire behaviour: step size varies with position and
+possibly drive speed, with no absolute reference anywhere in the loop.
+
+## Contrast-detect autofocus is viable 💡
+
+While recovering focus, a hill-climb over the *camera's own* preview JPEG size
+(bigger JPEG = more high-frequency detail = sharper) tracked focus cleanly and
+monotonically across 30+ steps:
+
+```
+step  1 Near 1: 143,927 (+447)     step  9 Near 1: 147,463 (+362)
+step  2 Near 1: 144,495 (+568)     step 12 Near 1: 148,768 (+444)
+step  6 Near 1: 145,832 (+340)     step 14 Near 1: 149,581 (+69)
+```
+
+So an **"auto-focus" button** in the customer config screen is implementable
+without any camera AF support: nudge, measure sharpness, repeat until the
+metric peaks. Worth considering alongside manual nudges.
+
+Two caveats found in practice:
+
+- **JPEG size is a weak proxy on low-detail scenes.** Against a blank wall the
+  per-step delta (~0.2%) sat in the noise. A real implementation should use
+  variance-of-Laplacian over a **user-selected region** (where guests stand),
+  not whole-frame compressed size.
+- **It does not cleanly peak** when the scene contains objects at several
+  distances — the metric kept climbing as nearer objects came into focus. A
+  defined focus region is required for it to mean anything.
