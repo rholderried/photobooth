@@ -4,6 +4,9 @@
 **Tracked by git:** ❌ **NO.** Lives at `/etc/apache2/sites-available/000-default.conf`.
 Will **not** survive a Pi reimage. Reapply from this document.
 
+> One of ~12 pieces of system state outside this repo — full inventory in
+> [untracked-system-state.md](untracked-system-state.md).
+
 ---
 
 ## The problem
