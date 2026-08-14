@@ -13,9 +13,40 @@ Nikon, Sony and Fuji all work this way. Nothing else in
 [../architecture/preview-architecture.md](../architecture/preview-architecture.md)
 is camera-specific — the server just forwards bytes.
 
-⚠️ **Known gap:** `mjpeg_server.py` does not check the mime type, though
-libgphoto2 exposes it. A camera returning something other than JPEG would
-produce a silently broken stream instead of a clear error. Worth adding.
+✅ **Guarded since 2026-08-14.** `mjpeg_server.py` validates the first frame
+and refuses to serve a non-JPEG camera rather than emitting an undecodable
+stream:
+
+- Magic bytes (`ffd8`) are authoritative; libgphoto2's mime string is carried
+  through only to make the log message diagnosable.
+- On mismatch, `/stream.mjpg` and `/snapshot.jpg` return **503**, while
+  `/healthz` keeps answering and reports `format_error` — that is how you
+  diagnose it.
+- The verdict is **sticky**: a later good frame does not revive the stream,
+  because the camera has not changed.
+- **Capture is deliberately unaffected.** A camera whose preview we cannot
+  serve can still take pictures, and the message says so.
+
+So on an incompatible camera you get this in the journal, instead of a
+mysteriously blank preview:
+
+```
+Camera preview is not JPEG, so it cannot be served as MJPEG. libgphoto2
+reports mime=image/webp; frame starts with 52494646 (expected ffd8...),
+524 bytes. Preview is disabled; capture is unaffected.
+```
+
+Note the healthy case logs at INFO, and the service runs at ERROR level — so
+silence is success. The observable signal is `format_error: null` in
+`/healthz`.
+
+Tested by `api/test_mjpeg_format.py` (13 checks). `MjpegServer` takes plain
+bytes, so an incompatible camera is simulated by publishing non-JPEG bytes —
+no second body needed:
+
+```bash
+cd /var/www/html/api && python3 test_mjpeg_format.py
+```
 
 ## What is Canon-specific
 
