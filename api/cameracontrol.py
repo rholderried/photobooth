@@ -24,6 +24,8 @@ from datetime import datetime, timedelta
 
 import gphoto2 as gp
 
+from mjpeg_server import MjpegServer
+
 TEMP_VIDEO_FILE_APPENDIX = ".temp.mp4"
 
 log = logging.getLogger(__name__)
@@ -112,6 +114,7 @@ class CameraControl:
         self.camera = None
         self.socket = None
         self.ffmpeg = None
+        self.mjpeg = None
         self.bsm_stopTime = None
 
         self.connect_to_camera()
@@ -259,6 +262,20 @@ class CameraControl:
         if args.exit:
             self.socket.send_string("Exiting service!")
             self.exit_gracefully()
+        # Focus nudge. Canon exposes only relative steps (Near/Far 1-3) with
+        # no position feedback, and manualfocusdrive requires liveview active
+        # -- which is exactly why it has to be driven from in here, by the
+        # process already holding the PTP session. See
+        # docs-internal/reference/gphoto2-eos-rp.md
+        focus = getattr(args, "focus", None)
+        if focus:
+            try:
+                self.set_config("manualfocusdrive", focus)
+                self.socket.send_string("Focus driven: %s" % focus)
+            except UnsupportedConfigException as e:
+                log.error(e)
+                self.socket.send_string("failure")
+            return False
         video_settings_were_updated = self.handle_chroma_params(args)
         video_settings_were_updated = (
             video_settings_were_updated or self.handle_video_params(args)
@@ -309,6 +326,12 @@ class CameraControl:
         """
         Starts the ffmpeg process
         """
+        if getattr(self.args, "no_v4l2", False):
+            # MJPEG-only mode: nothing consumes the v4l2loopback device, so
+            # don't start ffmpeg (or require the device to exist at all).
+            log.info("Skipping ffmpeg/v4l2 output (--no-v4l2)")
+            self.ffmpeg = None
+            return
         input_config = ["-i", "-", "-vcodec", "rawvideo", "-pix_fmt", "yuv420p"]
         stream = ["-preset", "ultrafast", "-f", "v4l2", self.args.device]
         pre_input = []
@@ -451,7 +474,8 @@ class CameraControl:
 
     def daemon(self):
         """
-        Sends the camera output into ffmpeg which writes it into the virtual webcam
+        Reads preview frames from the camera and fans them out: into ffmpeg
+        (virtual webcam, optional) and/or over HTTP as MJPEG.
         """
         context = zmq.Context()
         self.socket = context.socket(zmq.REP)
@@ -459,6 +483,13 @@ class CameraControl:
         self.handle_chroma_params(self.args)
         self.handle_bsm_timeout(self.args)
         self.ffmpeg_open()
+        if getattr(self.args, "mjpeg_port", 0):
+            self.mjpeg = MjpegServer(
+                host=self.args.mjpeg_bind,
+                port=self.args.mjpeg_port,
+                max_fps=self.args.mjpeg_fps,
+            )
+            self.mjpeg.start()
         try:
             while True:
                 try:
@@ -477,7 +508,12 @@ class CameraControl:
                     if self.show_video:
                         capture = self.camera.capture_preview()
                         img_bytes = memoryview(capture.get_data_and_size()).tobytes()
-                        self.ffmpeg.stdin.write(img_bytes)
+                        # capture_preview() already yields complete JPEGs, so
+                        # MJPEG needs no re-encoding -- publish them as-is.
+                        if self.mjpeg is not None:
+                            self.mjpeg.publish(img_bytes)
+                        if self.ffmpeg is not None:
+                            self.ffmpeg.stdin.write(img_bytes)
                     else:
                         time.sleep(0.1)
                 except gp.GPhoto2Error:
@@ -522,6 +558,8 @@ class CameraControl:
         if self.running:
             self.running = False
             log.info("Exiting...")
+            if self.mjpeg:
+                self.mjpeg.stop()
             if self.camera:
                 self.disable_video()
                 self.camera.exit()
@@ -699,6 +737,56 @@ def main():
     parser.add_argument(
         "--forceRecreateCam", action="store_true", help="exit the service"
     )
+    parser.add_argument(
+        "--focus",
+        default=None,
+        type=str,
+        dest="focus",
+        help=(
+            'drive manual focus by one relative step, e.g. "Near 1" (fine) '
+            'through "Far 3" (coarse). Requires an already-running service '
+            "with preview active, since Canon needs liveview for this and "
+            "only one process may hold the camera"
+        ),
+    )
+    parser.add_argument(
+        "--mjpeg-port",
+        default=0,
+        type=int,
+        dest="mjpeg_port",
+        help=(
+            "serve the live preview as MJPEG over HTTP on this port "
+            "(0 disables). Frames come straight from the camera as JPEG, so "
+            "this needs neither ffmpeg nor v4l2loopback"
+        ),
+    )
+    parser.add_argument(
+        "--mjpeg-bind",
+        default="0.0.0.0",
+        type=str,
+        dest="mjpeg_bind",
+        help=(
+            "address the MJPEG server binds to. Default 0.0.0.0 so phones on "
+            "the LAN can view it; use 127.0.0.1 to restrict to the kiosk"
+        ),
+    )
+    parser.add_argument(
+        "--mjpeg-fps",
+        default=15.0,
+        type=float,
+        dest="mjpeg_fps",
+        help="cap MJPEG output frame rate (0 = uncapped, camera does ~21 fps)",
+    )
+    parser.add_argument(
+        "--no-v4l2",
+        action="store_true",
+        dest="no_v4l2",
+        help=(
+            "do not start ffmpeg or require a v4l2loopback device. Use "
+            "together with --mjpeg-port for a preview path that avoids "
+            "v4l2loopback entirely"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -707,7 +795,9 @@ def main():
         log.info("Recreate virtual camera")
         recreate_virtual_camera(video_nr=9)
 
-    if not args.device:
+    if args.no_v4l2:
+        log.info("--no-v4l2 set, skipping virtual camera setup")
+    elif not args.device:
         log.info("Not device set, try to autodetect")
         v4l2_devices = get_v4l2_devices()
         if len(v4l2_devices) > 1:
@@ -747,4 +837,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-create_ffmpeg_webcam_service

@@ -92,6 +92,33 @@ false precision over a control that cannot hit it — hence the visual
 nudge-based UI in
 [../decisions/0001-preview-architecture.md](../decisions/0001-preview-architecture.md).
 
+## Preview frames (measured 2026-08-14)
+
+`capture_preview()` via `python-gphoto2` returns **complete JPEG images**, not
+raw frames:
+
+```
+first 4 bytes : ffd8ffdb          ← JPEG SOI
+last  2 bytes : ffd9              ← JPEG EOI
+gphoto mime   : image/jpeg
+dimensions    : 960x640
+size          : ~148 KB/frame (147,578–148,126 across 30 frames)
+rate          : 20.9 fps sustained
+```
+
+This is why MJPEG streaming needs no re-encoding, no ffmpeg and no
+v4l2loopback — see
+[../decisions/0001-preview-architecture.md](../decisions/0001-preview-architecture.md).
+
+**Focus during preview is confirmed working**, both directly and through the
+running daemon with an HTTP client attached. `manualfocusdrive` applied
+cleanly with no interruption to the frame stream:
+
+```
+Near 1  -> ok; preview still alive (147,719 bytes)
+Far 1   -> ok; preview still alive (147,908 bytes)
+```
+
 ## Open question — worth measuring
 
 Are the nudges **repeatable**? Test: drive `Near 3` ×10, then `Far 3` ×10, and
@@ -99,4 +126,6 @@ check whether focus returns to the same plane. If it does, a homing routine
 becomes *conceivable* (though still fragile). If it doesn't, any
 calibration-based approach is dead and visual-only is the sole option.
 
-Not yet run — needs a working liveview to observe the result.
+Not yet run. The blocker is gone now — the MJPEG endpoint gives a way to
+*observe* the result — but it needs a fixed target and a sharpness metric
+(e.g. variance of Laplacian over the frame) to be more than eyeballing.

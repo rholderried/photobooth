@@ -61,3 +61,7 @@ scripts/rembg_venv/
 /.venv
 /site
 /.envrc
+
+# Python bytecode (cameracontrol.py / mjpeg_server.py)
+__pycache__/
+*.pyc
