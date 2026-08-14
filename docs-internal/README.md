@@ -31,6 +31,12 @@ PHP backend → JS frontend):
 Keep [reference/php-for-python-devs.md](reference/php-for-python-devs.md) open
 alongside — it collects the PHP idioms that don't map cleanly from Python.
 
+**Rebuilding this booth from scratch?** Start instead with
+[operations/untracked-system-state.md](operations/untracked-system-state.md) —
+the complete inventory of configuration that lives *outside* this repo
+(Apache, sudoers, systemd units, kiosk dotfiles, group memberships). None of
+it survives a fresh Pi image, and the booth does not function without it.
+
 ## Layout
 
 | Directory | Contents |

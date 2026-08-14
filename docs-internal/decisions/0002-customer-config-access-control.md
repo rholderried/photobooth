@@ -41,6 +41,14 @@ Enforce the boundary in **three independent layers**:
 
 ## Open questions
 
+- ⚠️ **The booth does not currently provide its own WiFi.** `hostapd` is
+  **masked** and `dnsmasq` disabled, so the premise "customer connects to the
+  booth's WiFi" does not hold today — the Pi joins an existing network. An AP
+  config exists (SSID `retro_pbx`, WPA2, `wlan0`) but is switched off. Either
+  bring the AP back up, or accept that the customer joins the venue network
+  alongside the booth. This affects the whole threat model: on a venue
+  network, "anyone on the WiFi" is a much larger set of people. Details in
+  [../operations/untracked-system-state.md](../operations/untracked-system-state.md) §11.
 - **QR-code download flow.** If guests scan a QR to download photos, their
   phones need gallery/download endpoints — so `protect.index` cannot be a
   blanket lock. The per-route policy is **not yet mapped.**
