@@ -12,10 +12,10 @@ repo. None of it survives a fresh Pi image. This is the complete inventory.
 | # | Item | Location | Status |
 |---|---|---|---|
 | 1 | Apache vhost hardening | `/etc/apache2/sites-available/000-default.conf` | ⚠️ security |
-| 2 | `www-data` sudo rule | `/etc/sudoers.d/` | ⚠️ capture breaks without it |
-| 3 | Capture wrapper | `/usr/local/bin/capture` | ⚠️ |
-| 4 | go2rtc binary + config + unit | `/usr/local/bin/go2rtc`, `/etc/go2rtc.yaml`, `/etc/systemd/system/go2rtc.service` | ⚠️ preview |
-| 5 | cameracontrol unit | `/etc/systemd/system/cameracontrol.service` | disabled |
+| 2 | `www-data` sudo rule | `/etc/sudoers.d/` | **now unused** — see §2 |
+| 3 | Capture wrapper | `/usr/local/bin/capture` | **now unused** — see §3 |
+| 4 | go2rtc binary + config + unit | `/usr/local/bin/go2rtc`, `/etc/go2rtc.yaml`, `/etc/systemd/system/go2rtc.service` | **disabled** 2026-08-14 |
+| 5 | **cameracontrol unit** | `/etc/systemd/system/cameracontrol.service` | ⚠️ **LIVE — owns the camera** |
 | 6 | Kiosk autostart | `~/.config/labwc/autostart` | ⚠️ |
 | 7 | Compositor touch config | `~/.config/labwc/rc.xml` | ⚠️ touch scroll |
 | 8 | Group memberships | `www-data` in `video`,`plugdev`,`lp`,`lpadmin` | ⚠️ camera access |
@@ -38,21 +38,24 @@ Without it, `.git/`, `CLAUDE.md`, `config/`, `var/log/` and this entire
 www-data ALL=(ALL) NOPASSWD: /usr/bin/systemctl start go2rtc.service, /usr/bin/systemctl stop go2rtc.service
 ```
 
-Required by `/usr/local/bin/capture` (§3), which is run by the web server.
-**Without this rule every capture fails**, because the wrapper cannot stop
-go2rtc to free the camera.
+Was required by `/usr/local/bin/capture` (§3), which the web server ran on
+every capture to stop and restart go2rtc.
 
 `roman` additionally has `NOPASSWD: ALL`.
 
-> Note: this rule becomes unnecessary under
-> [ADR 0001](../decisions/0001-preview-architecture.md) — a persistent
-> `cameracontrol.py` never stops go2rtc. Removing it then is a small
-> privilege reduction worth taking.
+> ✅ **No longer needed as of 2026-08-14.** The persistent `cameracontrol.py`
+> service never stops go2rtc, so `www-data` no longer needs to drive
+> `systemctl` at all. **Removing this rule is a free privilege reduction** —
+> it currently lets the web-server user start/stop a system service, which is
+> a meaningful bit of authority for a network-exposed PHP app to hold.
+> Worth doing before an event. Verify captures still work afterwards.
 
-## 3. `/usr/local/bin/capture` ⚠️
+## 3. `/usr/local/bin/capture` — now unused
 
-`root:root 0755`. The `commands.take_picture` config key points at it
-(`capture %s`).
+`root:root 0755`. **No longer referenced** as of 2026-08-14:
+`commands.take_picture` now points at `cameracontrol.py` directly. Kept on
+disk as a fallback for rolling back to the go2rtc architecture. Historical
+value: this script *is* the mechanism behind both camera-reliability bugs.
 
 ```bash
 #!/bin/bash
@@ -97,11 +100,32 @@ log:
 spawns its `gphoto2` child **on demand** when a client connects, so an idle
 go2rtc still leaves the camera free.
 
-## 5. `cameracontrol.service`
+## 5. `cameracontrol.service` ⚠️ LIVE
 
-Present but **disabled** (won't start at boot). Unit contents are recorded in
-the research doc. This is the service
-[ADR 0001](../decisions/0001-preview-architecture.md) plans to adopt.
+**This now owns the camera.** Enabled and running since 2026-08-14; it serves
+both the live preview (MJPEG on port 8081) and captures, over one persistent
+PTP session.
+
+```ini
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/var/www/html/api
+ExecStart=/usr/bin/python3 /var/www/html/api/cameracontrol.py --mjpeg-port 8081 --no-v4l2
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+```
+
+Full unit and the matching config values:
+[deploy-mjpeg-preview.md](deploy-mjpeg-preview.md).
+
+**If the booth has no preview and captures fail, check this service first:**
+
+```bash
+systemctl status cameracontrol.service
+curl -s http://localhost:8081/healthz     # expect has_frame: true
+```
 
 ## 6. Kiosk autostart ⚠️
 

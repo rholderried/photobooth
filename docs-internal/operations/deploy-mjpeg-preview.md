@@ -1,9 +1,20 @@
 # Deploying the MJPEG preview pipeline
 
-**Status:** `current` — validated end-to-end 2026-08-14, **not yet deployed**
-**Code:** already merged to `production` (`api/mjpeg_server.py` + patched
-`api/cameracontrol.py`). Backwards-compatible — the new flags default off, so
-merging changed nothing on its own.
+**Status:** `current` — ✅ **DEPLOYED 2026-08-14 and running live.**
+**Code:** merged to `production` (`api/mjpeg_server.py` + patched
+`api/cameracontrol.py`).
+
+Live configuration as of deployment:
+
+```
+cameracontrol.service : active, enabled, 0 restarts
+go2rtc.service        : inactive, DISABLED (out of the camera path)
+preview.url           : http://localhost:8081/stream.mjpg
+commands.take_picture : python3 cameracontrol.py --no-v4l2 --capture-image-and-download %s
+```
+
+The steps below are the reproduction/rebuild procedure — keep them current if
+the live setup changes.
 
 Implements [ADR 0001](../decisions/0001-preview-architecture.md). This switches
 the camera pipeline from "go2rtc streams, and every capture tears the PTP

@@ -1,12 +1,38 @@
 ---
 title: Camera reliability + live preview research
 date: 2026-08-08
-tags: [photobooth, capture-bug, go2rtc, cameracontrol, v4l2loopback, unresolved]
-status: bug-1-fix-known-unapplied, bug-2-fix-known-unapplied, live-preview-unresolved
-related-branch: feature/device-cam-preview
+tags: [photobooth, capture-bug, go2rtc, cameracontrol, v4l2loopback, resolved]
+status: RESOLVED 2026-08-14 — superseded by ADR 0001
+related-branch: feature/cameracontrol-mjpeg
 ---
 
 # Photobooth: Camera reliability + live preview research
+
+> ## ✅ Resolved 2026-08-14 — read this first
+>
+> **All three open items in this document are closed.** Both bugs are fixed
+> *by construction* rather than patched: `cameracontrol.py` now holds one
+> persistent PTP session for preview and capture, so there is no per-capture
+> teardown left to orphan a process or wedge the USB controller.
+>
+> | Item | Outcome |
+> |---|---|
+> | Bug #1 — orphaned `gphoto2` per capture | Fixed — go2rtc left the camera path; **0 orphans** measured |
+> | Bug #2 — PTP wedge under repeat captures | Fixed — no teardown; **0 timeouts** over repeated captures |
+> | Live preview | Solved — MJPEG served straight from `cameracontrol.py` |
+>
+> The v4l2loopback investigation below was **abandoned, not completed**. It
+> turned out to be unnecessary: `capture_preview()` already returns complete
+> JPEG frames, so no virtual video device is involved at all.
+> **Do not resume Approach A or B.**
+>
+> - Decision: [../decisions/0001-preview-architecture.md](../decisions/0001-preview-architecture.md)
+> - Deployment: [../operations/deploy-mjpeg-preview.md](../operations/deploy-mjpeg-preview.md)
+> - Camera facts: [../reference/gphoto2-eos-rp.md](../reference/gphoto2-eos-rp.md)
+>
+> Everything below is preserved as the record of how the diagnosis was
+> reached. Its "current system state" and "suggested next steps" sections are
+> **historical and no longer accurate.**
 
 **Current deployed state (production branch):** rolled back to the original working
 setup — `go2rtc` streaming directly from `gphoto2`, `preview.mode = 'url'`,

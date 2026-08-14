@@ -1,15 +1,8 @@
 # Live preview architecture
 
-**Status:** `partial` — replacement implemented and proven on a branch, not
-yet deployed. Updated 2026-08-14.
+**Status:** `current` — MJPEG architecture **deployed and live** 2026-08-14.
 
-## Current state (deployed)
-
-`go2rtc` streams directly from `gphoto2`, `preview.mode = 'url'`. Works, but
-couples preview to the per-capture PTP teardown — see
-[camera-backends.md](camera-backends.md).
-
-## Replacement (branch `feature/cameracontrol-mjpeg`, working)
+## Current state (deployed 2026-08-14)
 
 `api/mjpeg_server.py` serves the camera's preview frames as MJPEG over HTTP
 straight from `cameracontrol.py`, which holds the single PTP session.
@@ -27,9 +20,16 @@ Run it with:
 python3 cameracontrol.py --mjpeg-port 8081 --no-v4l2
 ```
 
-Proven working: 157 intact frames over 13 s, and focus driven over ZMQ
-*while streaming* without dropping the client. Full results and remaining
-gaps: [../decisions/0001-preview-architecture.md](../decisions/0001-preview-architecture.md).
+Deployment steps and live values:
+[../operations/deploy-mjpeg-preview.md](../operations/deploy-mjpeg-preview.md).
+Full validation results:
+[../decisions/0001-preview-architecture.md](../decisions/0001-preview-architecture.md).
+
+### Superseded: go2rtc
+
+`go2rtc` previously streamed directly from `gphoto2`. It is now **disabled**
+and out of the camera path entirely — it could not coexist with a persistent
+PTP session. Config and unit are still on disk for rollback.
 
 The key enabler is that `capture_preview()` already returns complete JPEGs
 ([../reference/gphoto2-eos-rp.md](../reference/gphoto2-eos-rp.md)), so no
