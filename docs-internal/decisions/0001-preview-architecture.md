@@ -1,6 +1,6 @@
 # ADR 0001 — Serve live preview as MJPEG from `cameracontrol.py`
 
-**Status:** `accepted` (2026-08-14) — not yet implemented
+**Status:** `accepted` (2026-08-14) — ✅ **implemented and deployed 2026-08-14**
 **Supersedes:** the go2rtc-direct-from-gphoto2 architecture, and the
 v4l2loopback approaches explored in
 [../research/camera-reliability-live-preview.md](../research/camera-reliability-live-preview.md)
