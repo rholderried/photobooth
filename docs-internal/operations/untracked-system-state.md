@@ -241,6 +241,8 @@ if that file is ever touched.
 
 ## Not covered here
 
-The printer pipeline (Pi → CUPS → SSH → Windows → DNP DS-RX1), colour
-management, and router setup. Separate, mostly-solved subsystems — documented
-elsewhere or not yet.
+The printer pipeline (Pi → CUPS → SSH → Windows → DNP DS-RX1) has its own
+file: [print-pipeline.md](print-pipeline.md) (backend, SSH key, CUPS error
+policy). It is versioned and installable from the separate repo
+`~/Git/fotobox-printserver` (`linux/install.sh`, `windows/install.ps1`). Colour management and router setup are separate,
+mostly-solved subsystems — documented elsewhere or not yet.
