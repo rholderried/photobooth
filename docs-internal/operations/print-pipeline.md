@@ -11,14 +11,14 @@ yet). It holds `linux/` (backend, `install.sh`, `printserver.conf`) and
 up from its README rather than by hand. See also
 [untracked-system-state.md](untracked-system-state.md).
 
-**Deployment state 2026-10-02 14:00:** the Pi and Windows both run repo HEAD
-(`153be9f`), installed with `linux/install.sh`. The Windows `print-job.ps1` was
-copied with scp; `windows/install.ps1` has never been run. The queue URI is now
+**Deployment state 2026-10-02 15:05:** the Pi and Windows both run repo HEAD
+(`d33fca3`). The Pi side was installed with `linux/install.sh`, the Windows side
+with `windows/install.ps1`, run over SSH from a copy in
+`C:\temp\fotobox-printserver`, then removed again. The queue URI is
 `sshprint://roman@dnp-ds-rx1-pc/DS-RX1`: print server, user and Windows
 printer name all come from the URI, so a different printer model only needs
 a change in `linux/printserver.conf`. `JobRetryInterval 30` /
-`JobRetryLimit 40` are set in `cupsd.conf`. T1 (job 636): backend start to
-"Job completed" in 4 s.
+`JobRetryLimit 40` are set in `cupsd.conf`.
 
 ## Chain
 
@@ -96,19 +96,21 @@ ribbon problems stopped the actual print.
 | T2 PC shut down (jobs 639/640) | with the PC off, attempts fail in **1–3 s** (`scp … rc=255`: connection refused or host unreachable, faster than ConnectTimeout). Job held 30 s, queue stayed enabled. When the PC came back, A's retry fell in the same second the second job B was sent, so A printed first and B waited ~5 s behind A's attempt. Both printed, nothing lost. A new job overtaking a *held* one was **not** observed in this run. |
 | T4 boot race (job 641) | ProDesk off, job queued, Pi rebooted, ProDesk switched on. A retry was running when the Pi shut down: cupsd's SIGTERM hit the backend's TERM trap (logged as "Job cancelled"), exit 1, job **kept** (not completed). Pi booted 14:21:34; first attempt 14:21:40 failed cleanly (`rc=255`) and was held. This is exactly where the wedding jobs "exited with no errors". Retried until the ProDesk was up, then printed at 14:23:06 after 5 attempts. |
 | T6 queue health | after all tests: enabled, idle, nothing pending. |
+| Overtaking (jobs 643/644) | A failed (PC blocked) at 15:01:34 and was held; B, sent right after unblocking, started **in the same second** and printed at 15:01:38; A's retry printed at 15:02:18. A guest's second attempt is not blocked by a held job. |
+| Partial-upload cleanup | dummy `printjob-OLDTEST.jpg` dated 2 h back was removed by the next print, a fresh one was kept. |
 
 Check any job's history with
 `sudo ~/Git/fotobox-printserver/linux/job-log.sh <job-id>`. It flags a job
 that completed without "Job handed to print server" (silently lost).
 
-Still open (2026-10-02): cleanup of partial uploads in `C:\temp` (below);
-the "new job overtakes a held job" case was never observed directly; the
-backend's "Job cancelled" message also appears when cupsd is merely shutting
-down; stale `Listen 192.168.178.53:631` in `cupsd.conf`.
-
-Finding from T3: a failed upload leaves a **partial `printjob-*.jpg` in
-`C:\temp`** (10 MB in the test), because `print-job.ps1` never runs for it.
-Not fixed yet.
+Resolved the same day: partial uploads in `C:\temp` are now removed by
+`print-job.ps1` once older than 1 h; the backend's TERM message reads
+"Stopped by CUPS (job cancelled or scheduler shutting down)"; the stale
+`Listen 192.168.178.53:631` was removed from `/etc/cups/cupsd.conf` (manual
+edit, backup `cupsd.conf.bak-20261002-*-listen`; CUPS now listens on
+`127.0.0.1:631` and `/run/cups/cups.sock` only, so it is not reachable from
+the network. Nothing needs that.) Still open: photobooth UI feedback on
+failed prints (F1); printer-side errors invisible to the Pi (F7).
 
 ## Gotchas found while preparing the fix
 
@@ -151,7 +153,11 @@ Not fixed yet.
   firewall rule `OpenSSH-Server-In-TCP` on the *Private* profile only,
   `roman` is an administrator (key in
   `C:\ProgramData\ssh\administrators_authorized_keys`), printer `DS-RX1` on
-  `USB001`.
+  `USB001`. Only active network: `WLAN 2` on the booth router's SSID
+  **PB01**, classified **Public**. SSH works there because of a hand-made
+  inbound rule "OpenSSH Server" (TCP 22, *all* profiles, any program),
+  besides the standard `OpenSSH-Server-In-TCP` (Private only). So the
+  ProDesk accepts SSH on any network it joins. The Ethernet port is unused.
 - **CUPS warns raw queues are deprecated** (`cupsd -t`). Our queue has no
   PPD, so it is raw. It works on CUPS 2.4.2; it will matter on a future CUPS 3.
 - **`lpoptions -p … | grep error-policy` shows nothing** for this queue — read
